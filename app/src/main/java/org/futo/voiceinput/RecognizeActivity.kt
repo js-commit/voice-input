@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.Intent
 import android.os.Bundle
 import android.speech.RecognizerIntent
+import android.view.Gravity
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -174,6 +175,14 @@ class RecognizeActivity : ComponentActivity() {
         scheduleUpdateCheckingJob(applicationContext)
         scheduleModelMigrationJob(applicationContext)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+
+        // Park the card near the bottom, roughly where the keyboard was, instead of dead
+        // center over the content being dictated into. Positional only - focusability and
+        // window flags are deliberately untouched (see the FLAG_NOT_FOCUSABLE history).
+        window.attributes = window.attributes.apply {
+            gravity = Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL
+            y = (24 * resources.displayMetrics.density).toInt()
+        }
     }
 
     override fun onDestroy() {

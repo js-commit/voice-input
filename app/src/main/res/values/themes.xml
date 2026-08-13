@@ -6,7 +6,9 @@
         <item name="android:windowBackground">@null</item>
         <item name="android:windowCloseOnTouchOutside">false</item>
         <item name="android:windowIsFloating">true</item>
-        <item name="android:backgroundDimEnabled">true</item>
+        <!-- No full-screen dim: the popup is a small card and the app being dictated into
+             should stay readable behind it. -->
+        <item name="android:backgroundDimEnabled">false</item>
     </style>
 
     <style name="Theme.BillingDialog" parent="Theme.AppCompat.Dialog">
