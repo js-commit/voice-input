@@ -40,7 +40,6 @@ import org.futo.voiceinput.migration.scheduleModelMigrationJob
 import org.futo.voiceinput.settings.pages.ConditionalUnpaidNoticeInVoiceInputWindow
 import org.futo.voiceinput.theme.UixThemeAuto
 import org.futo.voiceinput.updates.scheduleUpdateCheckingJob
-import java.lang.ref.WeakReference
 
 
 @Composable
@@ -126,14 +125,6 @@ fun PreviewRecognizeViewNoMic() {
 }
 
 class RecognizeActivity : ComponentActivity() {
-    companion object {
-        // This activity used to be declared launchMode="singleInstance" to guarantee there is only
-        // ever one recognizer window. That is incompatible with startActivityForResult, which is
-        // how every ACTION_RECOGNIZE_SPEECH caller starts us (see the comment in the manifest), so
-        // the guarantee is enforced here instead: a new recognizer tears down the previous one.
-        private var currentInstance: WeakReference<RecognizeActivity>? = null
-    }
-
     private val recognizer = object : RecognizerView() {
         override val context: Context
             get() = this@RecognizeActivity
@@ -178,49 +169,15 @@ class RecognizeActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-
-        // Stop any recognizer that is still up before we grab the microphone, otherwise the old
-        // AudioRecord is still holding it when startRecording runs.
-        currentInstance?.get()?.let { previous ->
-            if (previous !== this && !previous.isFinishing) {
-                previous.recognizer.reset()
-                previous.finish()
-            }
-        }
-        currentInstance = WeakReference(this)
-
         recognizer.reset()
         recognizer.init()
         scheduleUpdateCheckingJob(applicationContext)
         scheduleModelMigrationJob(applicationContext)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-
-        // Stay out of the input-method pipeline entirely. Without this flag, this window becoming
-        // focused makes it the IME target, which deactivates the calling editor's InputConnection
-        // for the whole dictation. The editor is only reactivated after we finish() and it regains
-        // window focus - but keyboards deliver our RESULT_OK and insert the text within a few
-        // dozen milliseconds of finish(), racing that reactivation. When the insert loses the
-        // race, the app-side InputConnection silently discards it and the transcription is lost
-        // (observed as e.g. "beginBatchEdit on inactive InputConnection" from the target app).
-        // With this flag the editor's InputConnection from before the dictation stays active the
-        // whole time, so an insert that arrives before the editor's refocus restart lands too.
-        //
-        // Do NOT be tempted to go further and use FLAG_NOT_FOCUSABLE: it was tried and it made
-        // things strictly worse. With no recognizer focus transition at the end, the editor
-        // regains window focus (and restarts its input, invalidating the old connection) *faster*
-        // than the keyboard's ~30ms insert path, so the insert hit the stale connection on every
-        // single attempt (observed deterministically with SwiftKey into Google Messages: restart
-        // at +0ms, rejected insert at +8ms). The recognizer-to-caller focus handoff this window
-        // creates is what gives the keyboard's insert time to win.
-        window.addFlags(WindowManager.LayoutParams.FLAG_ALT_FOCUSABLE_IM)
     }
 
     override fun onDestroy() {
         super.onDestroy()
-
-        if (currentInstance?.get() === this) {
-            currentInstance = null
-        }
 
         recognizer.reset()
     }
