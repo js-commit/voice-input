@@ -65,7 +65,10 @@ import kotlinx.coroutines.withContext
 import org.futo.voiceinput.ml.RunState
 import org.futo.voiceinput.settings.COPY_RESULT_TO_CLIPBOARD
 import org.futo.voiceinput.settings.ENABLE_ANIMATIONS
+import org.futo.voiceinput.settings.ENABLE_MULTILINGUAL
 import org.futo.voiceinput.settings.ENABLE_SOUND
+import org.futo.voiceinput.settings.ENGLISH_MODEL_INDEX
+import org.futo.voiceinput.settings.MULTILINGUAL_MODEL_INDEX
 import org.futo.voiceinput.settings.ENABLE_TRANSCRIPTION_HISTORY
 import org.futo.voiceinput.settings.LANGUAGE_TOGGLES
 import org.futo.voiceinput.settings.MANUALLY_SELECT_LANGUAGE
@@ -144,7 +147,8 @@ fun AnimatedRecognizeCircle(magnitude: Float = 0.5f) {
 @Composable
 fun InnerRecognize(
     magnitude: Float = 0.5f,
-    state: MagnitudeState = MagnitudeState.MIC_MAY_BE_BLOCKED
+    state: MagnitudeState = MagnitudeState.MIC_MAY_BE_BLOCKED,
+    modelName: String? = null
 ) {
     val shouldUseCircle = useDataStoreValueNullable(ENABLE_ANIMATIONS.key, default = ENABLE_ANIMATIONS.default)
 
@@ -182,6 +186,18 @@ fun InnerRecognize(
         textAlign = TextAlign.Center,
         color = MaterialTheme.colorScheme.onSurface
     )
+
+    if (modelName != null) {
+        Text(
+            modelName,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(top = 2.dp),
+            textAlign = TextAlign.Center,
+            style = Typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+        )
+    }
 }
 
 @Composable
@@ -275,6 +291,12 @@ abstract class RecognizerView {
     private var shouldCopyToClipboard = COPY_RESULT_TO_CLIPBOARD.default
     private var shouldSaveToHistory = ENABLE_TRANSCRIPTION_HISTORY.default
 
+    // Display-only mirror of the model choice AudioRecognizer makes in loadModelInner():
+    // english vs multilingual by ENABLE_MULTILINGUAL, overridden by a manually selected language.
+    private var englishModelName: String? = null
+    private var multilingualModelName: String? = null
+    private var activeModelName: String? = null
+
     suspend fun loadSettings() {
         shouldPlaySounds = context.getSetting(ENABLE_SOUND)
         shouldBeVerbose = context.getSetting(VERBOSE_PROGRESS)
@@ -282,6 +304,18 @@ abstract class RecognizerView {
         languages = context.getSetting(LANGUAGE_TOGGLES)
         shouldCopyToClipboard = context.getSetting(COPY_RESULT_TO_CLIPBOARD)
         shouldSaveToHistory = context.getSetting(ENABLE_TRANSCRIPTION_HISTORY)
+
+        // "English-39 (default)" -> "English-39"; the parenthetical is settings-list advice,
+        // not something worth repeating on every dictation.
+        englishModelName = ENGLISH_MODELS
+            .getOrNull(context.getSetting(ENGLISH_MODEL_INDEX))?.name?.substringBefore(" (")
+        multilingualModelName = MULTILINGUAL_MODELS
+            .getOrNull(context.getSetting(MULTILINGUAL_MODEL_INDEX))?.name?.substringBefore(" (")
+        activeModelName = if (context.getSetting(ENABLE_MULTILINGUAL)) {
+            multilingualModelName
+        } else {
+            englishModelName
+        }
     }
 
     /**
@@ -523,7 +557,8 @@ abstract class RecognizerView {
                 ) {
                     InnerRecognize(
                         magnitude = magnitude,
-                        state = state
+                        state = state,
+                        modelName = activeModelName
                     )
                 }
             }
@@ -571,6 +606,12 @@ abstract class RecognizerView {
                         allowClick = false
                     ) {
                         SelectLanguage(languages = languages, onSelected = {
+                            // Mirrors loadModelInner()'s forcedLanguage branch for the caption.
+                            activeModelName = if (it == "en") {
+                                englishModelName
+                            } else {
+                                multilingualModelName
+                            }
                             recognizer.forceLanguage(it)
 
                             if(!recognizer.isCurrentlyRecording()) {
