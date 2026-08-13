@@ -1,4 +1,7 @@
 <resources>
     <string name="app_name">FUTO Voice Input [Dev]</string>
     <string name="voice_input_method">FUTO Voice Input Method [Dev]</string>
+    <!-- This is the label the ACTION_RECOGNIZE_SPEECH chooser shows. Without a [Dev] override a
+         dev build is indistinguishable from a release install in the keyboard's mic chooser. -->
+    <string name="recognize_activity">Voice Input [Dev]</string>
 </resources>

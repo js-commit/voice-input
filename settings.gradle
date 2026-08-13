@@ -17,7 +17,10 @@ dependencyResolutionManagement {
     }
 }
 
-include ":dep:futopay:android:app"
+// LOCAL BUILD ONLY - not part of the upstream patch.
+// The dep/futopay module is not published in the public repo and nothing in :app depends on it,
+// so this orphaned include is removed to let Gradle configure.
+// include ":dep:futopay:android:app"
 
 rootProject.name = "VoiceInput"
 include ':app'
