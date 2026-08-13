@@ -145,9 +145,9 @@ val PERSONAL_DICTIONARY = SettingsKey(stringPreferencesKey("personal_dict"), "")
 // Safety net for the case where the recognized text never reaches the editor - the keyboard's
 // commit can be silently dropped if the editor's InputConnection is no longer active by the time
 // the result arrives. With this on, the text is always also on the clipboard so it can be pasted
-// by hand instead of being lost. Off by default because Android 13+ shows an unsuppressable
-// system "copied" overlay on every clipboard write, which is intrusive on every dictation.
-val COPY_RESULT_TO_CLIPBOARD = SettingsKey(booleanPreferencesKey("copy_result_to_clipboard"), false)
+// by hand instead of being lost. Note: Android 13+ shows an unsuppressable system "copied"
+// overlay on every clipboard write.
+val COPY_RESULT_TO_CLIPBOARD = SettingsKey(booleanPreferencesKey("copy_result_to_clipboard"), true)
 
 // Silent counterpart to the clipboard fallback: the last few transcriptions are kept on-device
 // (newest first, JSON array of {time, text}) and can be copied from the settings app, so a
