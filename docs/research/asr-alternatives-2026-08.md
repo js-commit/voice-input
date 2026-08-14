@@ -8,20 +8,30 @@ models this app ships, that runs on-device on a Galaxy S23 (minimum target) and 
 
 ---
 
-> **Update 2026-08-13 — implemented and measured.** The Parakeet engine now exists behind a
-> setting (see §10). Measured on a Galaxy Z Fold (SM-F976W), release build, 5.86 s English clip:
+> **Update 2026-08-13 — implemented and measured on real hardware.** The Parakeet engine now
+> exists behind a setting (see §10). Release builds, same 5.86 s English clip, decode time is
+> the steady-state second run:
 >
-> | Model | Load | Decode | RTF |
-> |---|---|---|---|
-> | Whisper English-39 (`tiny.en`) | 38 ms | 201 ms | 0.034 |
-> | Whisper English-244 (`small.en`) | 94 ms | **1355 ms** | 0.231 |
-> | **Parakeet 110M** | 745 ms | **143 ms** | **0.024** |
-> | **Parakeet 600M** | 1873 ms | **348 ms** | 0.059 |
+> | Model | Z Fold (SM-F976W) | | S23 (SM-S911W, SM8550) | |
+> |---|---|---|---|---|
+> | | **decode** | RTF | **decode** | RTF |
+> | Whisper English-39 (`tiny.en`) | 201 ms | 0.034 | 500 ms | 0.085 |
+> | Whisper English-74 (`base.en`) | — | — | 826 ms | 0.141 |
+> | Whisper English-244 (`small.en`) | 1355 ms | 0.231 | 2385 ms | 0.407 |
+> | **Parakeet 110M** | **143 ms** | **0.024** | **213 ms** | **0.036** |
+> | Parakeet 600M | 348 ms | 0.059 | 2211 ms | 0.378 |
 >
-> Parakeet 110M is **9.5× faster than the current best English model** and marginally faster
-> than even `tiny.en`, at an accuracy class above `small.en`. Parakeet 600M is still 3.9×
-> faster than `small.en`. The §7.1 "measure first" step is done; the extrapolated S23 estimates
-> below were conservative.
+> **Parakeet 110M is the clear winner on both devices**: 9.5× faster than `small.en` on the
+> Fold and **11.2× faster on the S23**, while also beating `tiny.en` outright. On the minimum
+> target it turns the best English model from a 2.4-second wait into 0.2 seconds.
+>
+> **Parakeet 600M does not survive contact with the S23.** Decode is 2211 ms — no better than
+> `small.en` — and model load takes **7.2 seconds** (vs 1.9 s on the Fold), on a device that had
+> 159 MB free at the time. It did not crash, but it is not a sensible daily driver on 8 GB.
+> Keep it opt-in; 110M is the recommendation on both devices.
+>
+> The §7.1 "measure first" step is done. The extrapolated S23 estimates below were roughly right
+> for the 110M and much too optimistic for the 600M.
 
 ## 1. Bottom line
 
