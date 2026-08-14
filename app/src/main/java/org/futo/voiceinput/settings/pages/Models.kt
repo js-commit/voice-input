@@ -21,7 +21,16 @@ import androidx.navigation.NavHostController
 import androidx.navigation.compose.rememberNavController
 import org.futo.voiceinput.ENGLISH_MODELS
 import org.futo.voiceinput.MULTILINGUAL_MODELS
+import org.futo.voiceinput.PARAKEET_MODELS
 import org.futo.voiceinput.R
+import org.futo.voiceinput.isParakeetSupported
+import org.futo.voiceinput.parakeetModelNeedsDownloading
+import org.futo.voiceinput.settings.ENGLISH_ENGINE
+import org.futo.voiceinput.settings.ENGLISH_ENGINE_PARAKEET
+import org.futo.voiceinput.settings.ENGLISH_ENGINE_WHISPER
+import org.futo.voiceinput.settings.NavigationItem
+import org.futo.voiceinput.settings.NavigationItemStyle
+import org.futo.voiceinput.settings.PARAKEET_MODEL_INDEX
 import org.futo.voiceinput.migration.ConditionalModelUpdate
 import org.futo.voiceinput.migration.NeedsMigration
 import org.futo.voiceinput.settings.DISMISS_MIGRATION_TIP
@@ -134,6 +143,9 @@ fun ModelsScreen(
     val (languages, _) = useDataStore(LANGUAGE_TOGGLES)
     val (useLanguageSpecificModels, _) = useDataStore(USE_LANGUAGE_SPECIFIC_MODELS)
 
+    val englishEngine = useDataStore(ENGLISH_ENGINE)
+    val parakeetModelIndex = useDataStore(PARAKEET_MODEL_INDEX)
+
     val context = LocalContext.current
     val needsUpdate = NeedsMigration()
 
@@ -191,13 +203,53 @@ fun ModelsScreen(
         }
 
         if((!useMultilingual) || (languages.contains("en") && useLanguageSpecificModels)) {
-            SettingRadio(
-                stringResource(R.string.english_model),
-                ENGLISH_MODELS.indices.toList(),
-                ENGLISH_MODELS.map { it.name },
-                ENGLISH_MODEL_INDEX
-            )
+            if (isParakeetSupported()) {
+                SettingRadio(
+                    "English engine",
+                    listOf(ENGLISH_ENGINE_WHISPER, ENGLISH_ENGINE_PARAKEET),
+                    listOf("Whisper (whisper.cpp)", "Parakeet (sherpa-onnx)"),
+                    ENGLISH_ENGINE
+                )
+            }
+
+            if (isParakeetSupported() && englishEngine.value == ENGLISH_ENGINE_PARAKEET) {
+                SettingRadio(
+                    "Parakeet model",
+                    PARAKEET_MODELS.indices.toList(),
+                    PARAKEET_MODELS.map { it.name },
+                    PARAKEET_MODEL_INDEX
+                )
+
+                val selected = PARAKEET_MODELS[
+                    parakeetModelIndex.value.coerceIn(PARAKEET_MODELS.indices)
+                ]
+                if (context.parakeetModelNeedsDownloading(selected)) {
+                    Tip(
+                        "%.0f MB still to download for \"%s\". It will be fetched the next time you dictate."
+                            .format(selected.totalBytes / 1_000_000.0, selected.name)
+                    )
+                }
+                Tip(
+                    "Parakeet is English-only and ignores the personal dictionary - these models " +
+                        "have no prompt conditioning. Multilingual dictation always uses Whisper."
+                )
+            } else {
+                SettingRadio(
+                    stringResource(R.string.english_model),
+                    ENGLISH_MODELS.indices.toList(),
+                    ENGLISH_MODELS.map { it.name },
+                    ENGLISH_MODEL_INDEX
+                )
+            }
         }
+
+        Spacer(modifier = Modifier.height(16.dp))
+        NavigationItem(
+            title = "Benchmark models",
+            subtitle = "Time Whisper against Parakeet on this device",
+            style = NavigationItemStyle.MiscNoArrow,
+            navigate = { navController.navigate("benchmark") }
+        )
 
         Tip(stringResource(R.string.parameter_count_tip))
     }

@@ -8,6 +8,21 @@ models this app ships, that runs on-device on a Galaxy S23 (minimum target) and 
 
 ---
 
+> **Update 2026-08-13 — implemented and measured.** The Parakeet engine now exists behind a
+> setting (see §10). Measured on a Galaxy Z Fold (SM-F976W), release build, 5.86 s English clip:
+>
+> | Model | Load | Decode | RTF |
+> |---|---|---|---|
+> | Whisper English-39 (`tiny.en`) | 38 ms | 201 ms | 0.034 |
+> | Whisper English-244 (`small.en`) | 94 ms | **1355 ms** | 0.231 |
+> | **Parakeet 110M** | 745 ms | **143 ms** | **0.024** |
+> | **Parakeet 600M** | 1873 ms | **348 ms** | 0.059 |
+>
+> Parakeet 110M is **9.5× faster than the current best English model** and marginally faster
+> than even `tiny.en`, at an accuracy class above `small.en`. Parakeet 600M is still 3.9×
+> faster than `small.en`. The §7.1 "measure first" step is done; the extrapolated S23 estimates
+> below were conservative.
+
 ## 1. Bottom line
 
 **Yes — and the gap is not marginal.**
@@ -625,3 +640,75 @@ Whisper distillations
 
 Hallucination / dictation behaviour
 - [Parakeet vs Whisper vs Nemotron (OpenWhispr)](https://openwhispr.com/blog/parakeet-vs-whisper-vs-nemotron)
+
+---
+
+## 10. What was actually built (2026-08-13)
+
+Implemented on this branch, engine selectable at **Settings → Model options → English engine**.
+
+### Shape
+
+- `ml/SpeechModel.kt` — interface both engines implement. `AudioRecognizer.model` is now a
+  `SpeechModel?` instead of a `WhisperModelWrapper?`.
+- `ml/ParakeetModel.kt` — sherpa-onnx `OfflineRecognizer`, fed the same 16 kHz `FloatArray` the
+  Whisper path already produces. No audio front-end changes were needed.
+- `ParakeetModels.kt` — model catalog, per-file URLs and SHA-256, ABI guard.
+- `settings/pages/Benchmark.kt` — in-app benchmark over a bundled 5.86 s clip.
+- `androidTest/ParakeetBenchmarkTest.kt` — the same benchmark as an instrumentation test.
+- `app/libs/sherpa-onnx-1.13.5-arm64.aar` — upstream v1.13.5 release AAR repacked to arm64-v8a
+  and stripped of the unused c-api/cxx-api libs: 49 MB → 9.9 MB.
+
+The Whisper path is untouched. Parakeet only engages when the recognition is unambiguously
+English (multilingual off, or the caller pinned `en`); multilingual and the
+detect-then-switch-to-English fallback stay on whisper.cpp. If the Parakeet files are missing or
+the ABI is wrong, it falls back rather than failing.
+
+### Corrections to this report found during implementation
+
+- **sherpa-onnx is not on Maven Central.** §5 Route B claimed `com.k2fsa.sherpa.onnx:
+  sherpa-onnx-android`; that coordinate 404s. Distribution is a prebuilt AAR attached to GitHub
+  releases, so it is vendored as a file dependency instead.
+- **APK cost was overstated.** §8 predicted ~15 MB per ABI. Restricting the AAR to arm64-v8a and
+  dropping the unused libs gives one `libonnxruntime.so` (21.7 MB) plus
+  `libsherpa-onnx-jni.so` (4.8 MB), 9.9 MB compressed in the AAR. No `abiFilters` change was
+  needed: whisper.cpp still builds for all four ABIs and `isParakeetSupported()` gates the
+  Parakeet engine at runtime.
+- **NeMo transducers need `modelType = "nemo_transducer"`.** Using `"transducer"` (the
+  icefall/Zipformer path) fails with `'vocab_size' does not exist in the metadata` and takes the
+  process down. Cost an hour; caught only because the 600M path was tested rather than assumed.
+- **The 110M int8 weights are not on Hugging Face** as individual files — that repo holds only
+  `.gitattributes`. They exist solely inside a `.tar.bz2` release archive, which the in-app
+  downloader cannot unpack, so they need re-hosting as plain files. The 600M weights *are* on
+  Hugging Face and download end-to-end today.
+- **`app/src/androidTest/java/FeatureExtractorTestAndroid.kt` was already broken** on
+  `local-dev`, referencing a `WhisperModel` class that no longer exists, so `connectedAndroidTest`
+  could not compile. Deleted, matching what upstream did.
+
+### Output formatting differs, and it is noticeable
+
+On the same clip:
+
+```
+Whisper  : Mr. Quilter is the apostle of the middle classes, and we are glad to welcome his gospel.
+110M     : mister Quilter is the apostle of the middle classes, and we are glad to welcome his gospel
+600M     : mister Quilter is the Apostle of the Middle Classes, and we are glad to welcome his gospel.
+```
+
+Both Parakeet models spell out "mister" instead of "Mr.", and neither capitalises the first
+word. The 600M also capitalises mid-sentence nouns. Commas and terminal periods do appear, so
+this is not missing punctuation so much as a different normalisation convention from Whisper's.
+For dictation this is a real, visible difference and is worth a period of daily use before
+switching the default — it is not captured by WER, which is computed on normalised text.
+
+### Not done
+
+- **Hosting for the 110M weights.** `PARAKEET_MODEL_BASE_URL` points at a
+  `js-commit/voice-input` release that does not exist yet; until it does, the 110M option only
+  works if the files are staged manually. The 600M option downloads from Hugging Face today.
+- **Partial results.** The Parakeet path shows no in-progress text. At 143 ms per utterance this
+  may not matter; §7.3 lists the options if it does.
+- **Hotwords / personal dictionary.** Not wired up. The user does not use the feature, so it was
+  left out rather than half-built; `decodingMethod` is `greedy_search`, and enabling hotwords
+  would mean switching to `modified_beam_search` and shipping the BPE vocab.
+- **QNN / NPU.** Still CPU-only. At RTF 0.024 there is no pressing reason to chase it.

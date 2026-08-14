@@ -38,6 +38,7 @@ import org.futo.voiceinput.R
 import org.futo.voiceinput.Status
 import org.futo.voiceinput.payments.BillingManager
 import org.futo.voiceinput.settings.pages.AdvancedScreen
+import org.futo.voiceinput.settings.pages.BenchmarkScreen
 import org.futo.voiceinput.settings.pages.CreditsScreen
 import org.futo.voiceinput.settings.pages.DependenciesScreen
 import org.futo.voiceinput.settings.pages.HelpScreen
@@ -148,6 +149,7 @@ fun SettingsMain(
         composable("languages") { LanguagesScreen(settingsViewModel, navController) }
         composable("testing") { TestScreen(settingsUiState.intentResultText, navController) }
         composable("models") { ModelsScreen(settingsViewModel, navController) }
+        composable("benchmark") { BenchmarkScreen(navController) }
         composable("input") { InputScreen(settingsViewModel, navController) }
         composable("themes") { ThemeScreen(navController) }
 

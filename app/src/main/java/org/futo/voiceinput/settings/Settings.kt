@@ -116,6 +116,16 @@ val ENABLE_30S_LIMIT = SettingsKey(booleanPreferencesKey("enable_30s_limit"), fa
 
 val ENGLISH_MODEL_INDEX = SettingsKey(intPreferencesKey("english_model_index"), 0)
 
+// Which engine handles English. 0 = whisper.cpp (the models this app has always shipped),
+// 1 = NVIDIA Parakeet via sherpa-onnx. Kept as a separate key from ENGLISH_MODEL_INDEX so that
+// switching engines does not disturb the user's Whisper model choice, and so the multilingual
+// path is untouched - Parakeet here is English-only.
+val ENGLISH_ENGINE = SettingsKey(intPreferencesKey("english_engine"), 0)
+const val ENGLISH_ENGINE_WHISPER = 0
+const val ENGLISH_ENGINE_PARAKEET = 1
+
+val PARAKEET_MODEL_INDEX = SettingsKey(intPreferencesKey("parakeet_model_index"), 0)
+
 val MULTILINGUAL_MODEL_INDEX = SettingsKey(intPreferencesKey("multilingual_model_index"), 1)
 
 val LANGUAGE_TOGGLES = SettingsKey(stringSetPreferencesKey("enabled_languages"), setOf("en"))

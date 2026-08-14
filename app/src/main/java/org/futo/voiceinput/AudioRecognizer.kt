@@ -22,18 +22,24 @@ import com.konovalov.vad.config.Model
 import com.konovalov.vad.config.SampleRate
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import android.util.Log
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.yield
 import org.futo.voiceinput.ggml.DecodingMode
+import org.futo.voiceinput.ml.ParakeetModelWrapper
 import org.futo.voiceinput.ml.RunState
+import org.futo.voiceinput.ml.SpeechModel
 import org.futo.voiceinput.ml.WhisperModelWrapper
 import org.futo.voiceinput.settings.BEAM_SEARCH
 import org.futo.voiceinput.settings.DISALLOW_SYMBOLS
 import org.futo.voiceinput.settings.ENABLE_30S_LIMIT
 import org.futo.voiceinput.settings.ENABLE_MULTILINGUAL
+import org.futo.voiceinput.settings.ENGLISH_ENGINE
+import org.futo.voiceinput.settings.ENGLISH_ENGINE_PARAKEET
 import org.futo.voiceinput.settings.ENGLISH_MODEL_INDEX
+import org.futo.voiceinput.settings.PARAKEET_MODEL_INDEX
 import org.futo.voiceinput.settings.IS_VAD_ENABLED
 import org.futo.voiceinput.settings.LANGUAGE_TOGGLES
 import org.futo.voiceinput.settings.MULTILINGUAL_MODEL_INDEX
@@ -63,7 +69,7 @@ abstract class AudioRecognizer {
         return isRecording
     }
 
-    private var model: WhisperModelWrapper? = null
+    private var model: SpeechModel? = null
 
     private var floatSamples: FloatBuffer = FloatBuffer.allocate(16000 * 30)
     private var recorderJob: Job? = null
@@ -185,6 +191,37 @@ abstract class AudioRecognizer {
         }
     }
 
+    /**
+     * Loads the Parakeet engine for an English-only recognition. Returns false if it is not
+     * usable (wrong ABI, or files not downloaded yet), in which case the caller falls back to
+     * whisper.cpp so a missing download never leaves the user with a dead mic button.
+     */
+    private suspend fun tryLoadParakeet(): Boolean {
+        if (!isParakeetSupported()) return false
+
+        val idx = context.getSetting(PARAKEET_MODEL_INDEX).coerceIn(PARAKEET_MODELS.indices)
+        val parakeetModel = PARAKEET_MODELS[idx]
+
+        if (context.parakeetModelNeedsDownloading(parakeetModel)) {
+            context.startParakeetDownloadActivity(parakeetModel)
+            return false
+        }
+
+        return try {
+            decodingStatus(RunState.ProcessingEncoder)
+            model = ParakeetModelWrapper(
+                context,
+                parakeetModel,
+                numThreads = Runtime.getRuntime().availableProcessors().coerceIn(2, 8)
+            )
+            true
+        } catch (e: Exception) {
+            Log.e("AudioRecognizer", "Parakeet load failed, falling back to Whisper: ${e.stackTraceToString()}")
+            model = null
+            false
+        }
+    }
+
     private suspend fun tryLoadModelOrCancel(primaryModel: ModelData, secondaryModelP: ModelData?) {
         val secondaryModel = if(context.getSetting(USE_LANGUAGE_SPECIFIC_MODELS)) { secondaryModelP } else { null }
         try {
@@ -222,6 +259,15 @@ abstract class AudioRecognizer {
             val multilingualModelIdx = context.getSetting(MULTILINGUAL_MODEL_INDEX)
             val languages = context.getSetting(LANGUAGE_TOGGLES)
             val isMultilingual = context.getSetting(ENABLE_MULTILINGUAL)
+
+            // Parakeet is English-only, so it only applies when the recognition is definitely
+            // English: multilingual off, or the caller pinned "en". Anything else stays on
+            // whisper.cpp, including the multilingual-detect-then-switch-to-English path.
+            val wantsParakeet = context.getSetting(ENGLISH_ENGINE) == ENGLISH_ENGINE_PARAKEET
+            val englishOnly = forcedLanguage == "en" || (forcedLanguage == null && !isMultilingual)
+            if (wantsParakeet && englishOnly && tryLoadParakeet()) {
+                return
+            }
 
             if (forcedLanguage != null) {
                 tryLoadModelOrCancel(

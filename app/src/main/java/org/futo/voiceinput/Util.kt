@@ -120,12 +120,27 @@ fun Context.startModelDownloadActivity(models: List<ModelData>) {
     @Suppress("NAME_SHADOWING") val models = models.filter { this.modelNeedsDownloading(it) }
     if(models.isEmpty()) return
 
+    startModelDownloadActivity(
+        names = models.map { it.ggml.ggml_file }
+    )
+}
+
+/**
+ * Generic entry point to the downloader. [urls] and [digests], when given, must line up with
+ * [names]; omitting them falls back to the FUTO model host and skips digest verification, which
+ * is what the Whisper models have always done.
+ */
+fun Context.startModelDownloadActivity(
+    names: List<String>,
+    urls: List<String>? = null,
+    digests: List<String>? = null
+) {
+    if(names.isEmpty()) return
+
     val intent = Intent(this, DownloadActivity::class.java)
-    intent.putStringArrayListExtra("models", ArrayList(models.map { model ->
-        arrayListOf(
-            model.ggml.ggml_file
-        )
-    }.flatten()))
+    intent.putStringArrayListExtra("models", ArrayList(names))
+    urls?.let { intent.putStringArrayListExtra("urls", ArrayList(it)) }
+    digests?.let { intent.putStringArrayListExtra("digests", ArrayList(it)) }
 
     if(this !is Activity) {
         intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
