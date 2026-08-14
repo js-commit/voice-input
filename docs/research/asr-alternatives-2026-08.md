@@ -8,9 +8,9 @@ models this app ships, that runs on-device on a Galaxy S23 (minimum target) and 
 
 ---
 
-> **Update 2026-08-13 — implemented and measured on real hardware.** The Parakeet engine now
-> exists behind a setting (see §10). Release builds, same 5.86 s English clip, decode time is
-> the steady-state second run:
+> **Update 2026-08-13 — implemented, measured on real hardware, and now the default** (see §10
+> for what was built and §11 for the defaults change). Release builds, same 5.86 s English clip,
+> decode time is the steady-state second run:
 >
 > | Model | Z Fold (SM-F976W) | | S23 (SM-S911W, SM8550) | |
 > |---|---|---|---|---|
@@ -711,11 +711,64 @@ this is not missing punctuation so much as a different normalisation convention 
 For dictation this is a real, visible difference and is worth a period of daily use before
 switching the default — it is not captured by WER, which is computed on normalised text.
 
+## 11. Defaults switched to Parakeet (2026-08-13)
+
+Parakeet stopped being opt-in. All three model defaults now pick the most accurate option that
+is actually affordable on the slowest targeted device, rather than the cheapest one:
+
+| Setting | Was | Now | Why |
+|---|---|---|---|
+| `ENGLISH_ENGINE` | Whisper | **Parakeet** | Wins on both axes at once — 7.50% avg WER beats every Whisper model shipped here, and it decodes 11× faster on the S23 |
+| `PARAKEET_MODEL_INDEX` | 110M | **110M** (unchanged) | See below |
+| `ENGLISH_MODEL_INDEX` | English-39 | **English-244** | Best Whisper model, for when Parakeet is off or unavailable |
+| `MULTILINGUAL_MODEL_INDEX` | Multilingual-74 | **Multilingual-244** | Same principle; multilingual is off by default so this only affects users who enable it |
+
+**Why not the 600M as the default,** which is the natural guess since it is the most accurate
+model available: it is 1.45 WER points better than the 110M (6.05% vs 7.50%) and costs 10×
+the decode time for it — 2211 ms vs 213 ms on the S23, which is no faster than the Whisper
+`small.en` it would be replacing — plus **7.2 seconds of model load** on a device that had
+159 MB free. It stays selectable, and the settings screen now warns about exactly this when it
+is picked. On the Z Fold the 600M is genuinely usable (348 ms), so the warning is phrased as a
+recommendation rather than a block.
+
+Consequences worth knowing:
+
+- A **fresh install now downloads 132 MB** (Parakeet 110M) before the first dictation, where
+  before it could dictate immediately off the bundled `tiny.en` asset. The bundled asset is
+  still in the APK and still used when Parakeet is unavailable.
+- `AudioRecognizer.tryLoadParakeet` previously returned a bare `false` for both "wrong ABI" and
+  "not downloaded yet", and the caller fell through to Whisper either way. With Parakeet as the
+  default that became a bug: on a fresh install neither engine has its files, so it would stack
+  two downloader activities. It now returns a three-state `ParakeetLoad`, and the download case
+  cancels the recognition the same way the Whisper path always has.
+- The models screen used to fetch the Whisper English model unconditionally on open. With the
+  English default raised to `small.en` that would mean a 264 MB download just for visiting the
+  screen while running Parakeet, so it now only fetches what the current engine will use.
+
+### Model names now carry their engine
+
+`"English-39"` did not say whether Whisper or Parakeet was running, which is ambiguous now that
+both exist — and the recognizer popup shows this same name. Entries are now
+`"Whisper English-244 (most accurate)"`, `"Parakeet 110M (recommended)"` and so on. The popup
+strips the parenthetical, so it reads `Whisper English-244` / `Parakeet 110M`.
+
+The `(default)` markers were dropped rather than moved: they go stale every time a default
+changes, and `(most accurate)` / `(fastest)` says the useful part directly.
+
+### Settings shortcut in the popup
+
+The model caption at the bottom of the recognizer popup is now tappable and carries a small gear
+icon, opening settings directly on the model screen (`EXTRA_NAVIGATE_TO`, consumed once so a
+later resume does not re-navigate). The caption is the natural target: it already tells you which
+model is about to run, so it is the obvious thing to tap when that is not the one you wanted.
+
+Two things this had to get right: the `clickable` must consume the tap so it does not also fire
+the surface-wide tap-to-finish gesture underneath it, and `SettingsActivity` is `singleTask`, so
+it needs an `onNewIntent` override or a deep link arriving at an already-running instance is
+silently dropped.
+
 ### Not done
 
-- **Hosting for the 110M weights.** `PARAKEET_MODEL_BASE_URL` points at a
-  `js-commit/voice-input` release that does not exist yet; until it does, the 110M option only
-  works if the files are staged manually. The 600M option downloads from Hugging Face today.
 - **Partial results.** The Parakeet path shows no in-progress text. At 143 ms per utterance this
   may not matter; §7.3 lists the options if it does.
 - **Hotwords / personal dictionary.** Not wired up. The user does not use the feature, so it was

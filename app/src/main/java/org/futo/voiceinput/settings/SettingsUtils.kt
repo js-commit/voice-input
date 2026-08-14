@@ -1,5 +1,6 @@
 package org.futo.voiceinput.settings
 
+import android.app.Activity
 import android.content.ActivityNotFoundException
 import android.content.ComponentName
 import android.content.Context
@@ -18,9 +19,11 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.lifecycle.ViewModel
@@ -118,6 +121,16 @@ fun SettingsMain(
 ) {
     val settingsUiState by settingsViewModel.uiState.collectAsState()
 
+    // Deep link from the recognizer popup's settings shortcut. Read and consumed once:
+    // SettingsActivity rebuilds its whole content on every uiState change, so leaving the extra
+    // in place would yank the user back to this screen every time they returned to the app.
+    val context = LocalContext.current
+    val deepLinkRoute = remember {
+        (context as? Activity)?.intent?.getStringExtra(EXTRA_NAVIGATE_TO)?.also {
+            context.intent.removeExtra(EXTRA_NAVIGATE_TO)
+        }
+    }
+
     val isAlreadyPaid = useDataStore(IS_ALREADY_PAID.key, default = IS_ALREADY_PAID.default)
     val hasSeenNotice = useDataStore(HAS_SEEN_PAID_NOTICE.key, default = HAS_SEEN_PAID_NOTICE.default)
     val paymentDest = if (!isAlreadyPaid.value && hasSeenNotice.value) {
@@ -133,6 +146,17 @@ fun SettingsMain(
             navController.popBackStack("home", false)
             navController.navigate(
                 paymentDest,
+                NavOptions.Builder().setLaunchSingleTop(true).build()
+            )
+        }
+    }
+
+    // Only when the payment screens are not claiming the back stack, otherwise the effect above
+    // would pop straight back over this. Home stays the start destination so back still works.
+    LaunchedEffect(deepLinkRoute, paymentDest) {
+        if (deepLinkRoute != null && paymentDest == "pleasePay") {
+            navController.navigate(
+                deepLinkRoute,
                 NavOptions.Builder().setLaunchSingleTop(true).build()
             )
         }

@@ -1,6 +1,7 @@
 package org.futo.voiceinput.settings
 
 import android.Manifest
+import android.content.Context
 import android.content.Intent
 import android.os.Bundle
 import android.speech.RecognizerIntent
@@ -20,6 +21,28 @@ import org.futo.voiceinput.R
 import org.futo.voiceinput.payments.BillingManager
 import org.futo.voiceinput.theme.UixThemeAuto
 import org.futo.voiceinput.updates.scheduleUpdateCheckingJob
+
+/**
+ * Optional string extra naming a NavHost route to open instead of the home screen, so the
+ * recognizer popup can drop the user straight into the screen they wanted. See [openAppSettings].
+ */
+const val EXTRA_NAVIGATE_TO = "org.futo.voiceinput.NAVIGATE_TO"
+
+/**
+ * Opens the settings app, optionally at a specific screen. Usable from the input method service,
+ * which has no activity of its own to launch from.
+ */
+fun Context.openAppSettings(route: String? = null) {
+    try {
+        val intent = Intent(this, SettingsActivity::class.java)
+        route?.let { intent.putExtra(EXTRA_NAVIGATE_TO, it) }
+        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+        startActivity(intent)
+    } catch (e: Exception) {
+        // A dead settings shortcut must never take down a dictation in progress.
+        e.printStackTrace()
+    }
+}
 
 class SettingsActivity : ComponentActivity() {
     internal lateinit var billing: BillingManager
@@ -91,6 +114,15 @@ class SettingsActivity : ComponentActivity() {
         }
 
         scheduleUpdateCheckingJob(applicationContext)
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+
+        // This activity is singleTask, so a deep link arriving while it is already running lands
+        // here rather than in onCreate. Without setIntent, getIntent() would keep returning the
+        // launcher intent and EXTRA_NAVIGATE_TO would be silently dropped.
+        setIntent(intent)
     }
 
     override fun onStart() {

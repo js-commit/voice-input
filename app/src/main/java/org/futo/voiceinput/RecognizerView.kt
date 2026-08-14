@@ -11,12 +11,15 @@ import android.os.SystemClock
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityManager
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.indication
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.PressInteraction
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxSize
@@ -24,6 +27,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -67,7 +71,11 @@ import org.futo.voiceinput.settings.COPY_RESULT_TO_CLIPBOARD
 import org.futo.voiceinput.settings.ENABLE_ANIMATIONS
 import org.futo.voiceinput.settings.ENABLE_MULTILINGUAL
 import org.futo.voiceinput.settings.ENABLE_SOUND
+import org.futo.voiceinput.settings.ENGLISH_ENGINE
+import org.futo.voiceinput.settings.ENGLISH_ENGINE_PARAKEET
 import org.futo.voiceinput.settings.ENGLISH_MODEL_INDEX
+import org.futo.voiceinput.settings.PARAKEET_MODEL_INDEX
+import org.futo.voiceinput.settings.openAppSettings
 import org.futo.voiceinput.settings.MULTILINGUAL_MODEL_INDEX
 import org.futo.voiceinput.settings.ENABLE_TRANSCRIPTION_HISTORY
 import org.futo.voiceinput.settings.LANGUAGE_TOGGLES
@@ -148,7 +156,8 @@ fun AnimatedRecognizeCircle(magnitude: Float = 0.5f) {
 fun InnerRecognize(
     magnitude: Float = 0.5f,
     state: MagnitudeState = MagnitudeState.MIC_MAY_BE_BLOCKED,
-    modelName: String? = null
+    modelName: String? = null,
+    openSettings: (() -> Unit)? = null
 ) {
     val shouldUseCircle = useDataStoreValueNullable(ENABLE_ANIMATIONS.key, default = ENABLE_ANIMATIONS.default)
 
@@ -188,15 +197,39 @@ fun InnerRecognize(
     )
 
     if (modelName != null) {
-        Text(
-            modelName,
+        val captionColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+
+        // Doubles as the settings shortcut: the caption already says which model is about to run,
+        // so it is the obvious thing to tap when that is not the one you wanted. The clickable
+        // consumes the tap, so it does not also trigger the surface-wide tap-to-finish gesture.
+        Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(top = 2.dp),
-            textAlign = TextAlign.Center,
-            style = Typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
-        )
+                .padding(top = 2.dp)
+                .then(
+                    if (openSettings != null) Modifier.clickable { openSettings() } else Modifier
+                )
+                .padding(vertical = 6.dp),
+            horizontalArrangement = Arrangement.Center,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                modelName,
+                textAlign = TextAlign.Center,
+                style = Typography.labelSmall,
+                color = captionColor
+            )
+
+            if (openSettings != null) {
+                Spacer(modifier = Modifier.width(4.dp))
+                Icon(
+                    Icons.Default.Settings,
+                    contentDescription = stringResource(R.string.open_voice_input_settings),
+                    modifier = Modifier.size(14.dp),
+                    tint = captionColor
+                )
+            }
+        }
     }
 }
 
@@ -305,17 +338,40 @@ abstract class RecognizerView {
         shouldCopyToClipboard = context.getSetting(COPY_RESULT_TO_CLIPBOARD)
         shouldSaveToHistory = context.getSetting(ENABLE_TRANSCRIPTION_HISTORY)
 
-        // "English-39 (default)" -> "English-39"; the parenthetical is settings-list advice,
-        // not something worth repeating on every dictation.
-        englishModelName = ENGLISH_MODELS
-            .getOrNull(context.getSetting(ENGLISH_MODEL_INDEX))?.name?.substringBefore(" (")
-        multilingualModelName = MULTILINGUAL_MODELS
-            .getOrNull(context.getSetting(MULTILINGUAL_MODEL_INDEX))?.name?.substringBefore(" (")
+        // "Whisper English-244 (most accurate)" -> "Whisper English-244"; the parenthetical is
+        // settings-list advice, not something worth repeating on every dictation. The engine is
+        // part of the name so the caption says whether Whisper or Parakeet is about to run.
+        englishModelName = if (
+            context.getSetting(ENGLISH_ENGINE) == ENGLISH_ENGINE_PARAKEET && isParakeetSupported()
+        ) {
+            // Mirrors tryLoadParakeet()'s coercion, so the caption cannot disagree with what
+            // AudioRecognizer actually loads.
+            PARAKEET_MODELS[
+                context.getSetting(PARAKEET_MODEL_INDEX).coerceIn(PARAKEET_MODELS.indices)
+            ].name.substringBefore(" (")
+        } else {
+            ENGLISH_MODELS[
+                context.getSetting(ENGLISH_MODEL_INDEX).coerceIn(ENGLISH_MODELS.indices)
+            ].name.substringBefore(" (")
+        }
+        multilingualModelName = MULTILINGUAL_MODELS[
+            context.getSetting(MULTILINGUAL_MODEL_INDEX).coerceIn(MULTILINGUAL_MODELS.indices)
+        ].name.substringBefore(" (")
         activeModelName = if (context.getSetting(ENABLE_MULTILINGUAL)) {
             multilingualModelName
         } else {
             englishModelName
         }
+    }
+
+    /**
+     * Opens the model settings and gets out of the way. Cancelling matters: without it the IME
+     * keeps recording behind the settings screen, and the keyboard stays swapped to voice input
+     * after the user is done changing models.
+     */
+    private fun openModelSettings() {
+        context.openAppSettings(route = "models")
+        recognizer.cancelRecognizer()
     }
 
     /**
@@ -558,7 +614,8 @@ abstract class RecognizerView {
                     InnerRecognize(
                         magnitude = magnitude,
                         state = state,
-                        modelName = activeModelName
+                        modelName = activeModelName,
+                        openSettings = { openModelSettings() }
                     )
                 }
             }
