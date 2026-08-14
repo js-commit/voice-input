@@ -6,6 +6,18 @@
         <item name="android:windowBackground">@null</item>
         <item name="android:windowCloseOnTouchOutside">false</item>
         <item name="android:windowIsFloating">true</item>
+        <!-- Translucent, not just floating. Keyboards that call us via a trampoline activity
+             (SwiftKey's VoiceInputHelperActivity) receive our result through the androidx
+             ActivityResult API, which unregisters its callback when the trampoline is STOPPED
+             and buffers the result; if the trampoline is then finished without restarting, the
+             recognized text is silently destroyed. One UI 9 / Android 17 stops the activity
+             behind a floating-but-not-translucent window (WindowManager logs our window as
+             "styleTranslucent=false, floating=true"), which turned every SwiftKey dictation
+             into that dropped-buffer path. With windowIsTranslucent the caller stays merely
+             paused, its callback stays registered, and the result is dispatched on arrival.
+             Android 16 treated floating and translucent alike, which is why this only broke
+             on newer devices. -->
+        <item name="android:windowIsTranslucent">true</item>
         <!-- No full-screen dim: the popup is a small card and the app being dictated into
              should stay readable behind it. -->
         <item name="android:backgroundDimEnabled">false</item>
