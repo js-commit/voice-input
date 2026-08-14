@@ -4,7 +4,9 @@
 **Branch:** `research/asr-model-survey`
 **Goal:** cut the battery cost of dictation by moving inference off the CPU onto the Qualcomm
 Hexagon NPU, **without losing accuracy**.
-**Status:** researched, not built. Staged plan with kill criteria below.
+**Status:** **built and measured — see §14.** It works and is fast; it is blocked from inside
+an app by device policy on both test phones, and is off by default. The plan below is kept as
+written so the reasoning that led there stays visible.
 
 ---
 
@@ -35,9 +37,7 @@ All verified directly against the sherpa-onnx repo and release assets, not from 
 | Download | 78–82 MB `.tar.bz2` per combination |
 
 **The S23 is `SM8550`** — confirmed by `adb shell getprop ro.soc.model` (board platform
-`kalama`). It is on the list. *(The Z Fold's SoC still needs confirming — it kept dropping off
-wireless adb. Both SM8750 and SM8850 have binaries, so it is almost certainly covered either
-way, but check before relying on it.)*
+`kalama`). It is on the list. *(The Z Fold 8 is `SM8850`, Hexagon v81 — since confirmed by `adb`.)*
 
 **The package contents are trivially simple** — I downloaded and extracted the SM8550 10s build:
 
@@ -122,7 +122,32 @@ This has to be redone on every sherpa-onnx upgrade. That is the ongoing maintena
 mirrored at `huggingface.co/csukuangfj/qnn-toolkit/resolve/main/v2.40.0.251030.zip` — so
 obtaining it does not require a Qualcomm account in practice, though see the next point.
 
-### 3.2 Shipping Qualcomm's runtime blobs — the genuine blocker
+### 3.2 Shipping Qualcomm's runtime blobs — RESOLVED, redistribution is permitted
+
+> **Update, after reading the actual EULA** (`LICENSE.pdf` inside QAIRT SDK 2.40.0.251030).
+> This section originally called redistribution "the genuine blocker". It is not. The grant in
+> §1 of the *AI Stack License* reads:
+>
+> > QTI grants to You a non-exclusive, non-transferable, revocable, limited **royalty- and
+> > fee-free** license … to … **(iv) distribute and sublicense the Software solely in object
+> > code format and as incorporated in Your software application** … For the avoidance of
+> > doubt, nothing herein grants You a license to distribute or sublicense the Software **on a
+> > standalone basis**.
+>
+> Bundling `libQnnHtp.so`, `libQnnSystem.so`, `libQnnHtpV73Stub.so` and the Hexagon skel inside
+> the APK is **exactly** the permitted case. What is forbidden is redistributing the SDK by
+> itself, which we have no reason to do.
+>
+> Two obligations we must honour: §2(b) forbids removing proprietary notices (so `NOTICE.txt`
+> goes into the app's existing licence-list machinery in `Credits.kt` /
+> `assets/license-list.html`), and §2(a) forbids reverse engineering. Neither is a burden.
+> The prohibited-use list (predictive policing, social scoring, biometric categorisation, …)
+> has no bearing on dictation.
+>
+> **F-Droid remains a separate question** — that is a free-software *packaging policy* issue,
+> not a legal one, and the flavour split below still applies. But there is no legal gate here.
+
+The original text follows for context.
 
 From sherpa-onnx's own Kotlin API, verbatim:
 
@@ -302,3 +327,93 @@ either could reasonably end the project.
 
 That is the right way to spend the next unit of effort — not on building it, and not on
 speculating further.
+
+---
+
+## 14. Built it. It works — but not from inside an app on these phones. (2026-08-14)
+
+Stage 1 and most of stage 2 are done. Summary: **the NPU path is real and fast, and it is
+blocked by device policy, not by anything in this codebase.**
+
+### What was built
+
+- sherpa-onnx v1.13.5 compiled from source with `SHERPA_ONNX_ENABLE_QNN=ON` against QAIRT SDK
+  2.40.0.251030, repacked as `app/libs/sherpa-onnx-1.13.5-qnn-arm64.aar` with the Hexagon
+  runtime (`libQnnHtp`, `libQnnSystem`, v73 + v81 stubs and DSP skeletons).
+- `QnnVariant` catalog in `ParakeetModels.kt`, per-SoC and per-duration, digest-pinned; binaries
+  hosted on the `asr-models-v1` release.
+- QNN branch in `ParakeetModel.kt`, length-based routing and CPU fallback in `AudioRecognizer.kt`,
+  a settings toggle, and `QnnParakeetTest` as an on-device check.
+
+### It works, and the numbers are good
+
+Driven from an adb shell on the **S23 (SM8550, Hexagon v73)**, 20 decodes of a 6.62 s clip:
+
+| | NPU (8 s binary) | NPU (15 s binary) | CPU (4 threads) |
+|---|---|---|---|
+| decode wall | **1.230 s** | 4.344 s | 2.333 s |
+| user CPU | 0.326 s | 0.326 s | 6.707 s |
+| sys CPU | 0.398 s | 0.398 s | 1.265 s |
+| **total CPU time** | **0.690 s** | 0.724 s | **7.972 s** |
+| per decode | **62 ms** | 217 ms | 117 ms |
+
+**1.9× faster for ~11.6× less CPU time.** The Z Fold 8 (SM8850, v81) matched it: 61 ms/decode,
+0.471 s CPU over the same 20 decodes.
+
+**Accuracy holds.** Within the binary's compiled length the QNN transcripts match the CPU model's
+- one trailing full stop on one clip, otherwise identical. That was the hard constraint and it
+passes. W8A16 with static calibration turns out to be at least as good as dynamic int8.
+
+**Right-sizing matters a lot.** The 8 s binary is 3.5× faster than the 15 s one on the same
+6.6 s clip, because a context binary always computes its full compiled length. Ship the smallest
+bucket that fits.
+
+**Truncation is real, and silent.** A 16.71 s clip through the 15 s binary lost its last three
+words with no error at all. The length check in `AudioRecognizer` is mandatory, not defensive.
+
+### Why it does not work inside the app
+
+`deviceCreate` returns **14001**, which with `QNN_MIN_ERROR_DEVICE = 14000` is
+`QNN_DEVICE_ERROR_INVALID_CONFIG`. The library loads fine and `prependAdspLibraryPath` succeeds -
+it is the DSP itself that refuses.
+
+The cause is device policy:
+
+```
+crw-rw-r--  1 system system  480, 0  /dev/adsprpc-smd    u:object_r:vendor_qdsp_device:s0
+```
+
+Read-write for `system` only, read-only for everyone else. The adb shell user gets through;
+an ordinary app uid does not. Samsung does not open the DSP to third-party apps on these
+devices. Things tried that did not help:
+
+- `extractNativeLibs=true`, so the skeleton is a real file rather than mapped inside the APK.
+  (Worth keeping anyway - the DSP loader cannot read a library that is still in the APK.)
+- Patching `qnn-backend.cc` to request an **unsigned protection domain** via
+  `QNN_HTP_DEVICE_CONFIG_OPTION_SIGNEDPD`, which is precisely the mechanism meant for
+  unprivileged apps. sherpa-onnx passes `nullptr` there; adding the config changed nothing.
+
+### The part that makes this dangerous
+
+sherpa-onnx handles QNN errors with `SHERPA_ONNX_EXIT(-1)` (`csrc/qnn/macros.h`) - it **kills the
+process** rather than throwing. So `tryLoadParakeet`'s catch never runs, and the CPU fallback
+never happens: the keyboard just dies mid-dictation.
+
+`USE_NPU` therefore **defaults to false** and the setting is labelled experimental. Do not flip
+that default until sherpa-onnx returns an error instead of exiting.
+
+### What would make this shippable
+
+1. **Upstream sherpa-onnx should not exit on QNN failure.** A returned error would let us probe
+   the NPU once, cache the result, and fall back cleanly. This is the single highest-value fix
+   and it is a small patch worth sending upstream.
+2. **A cheap pre-flight check** before constructing the recognizer - even just attempting to open
+   `/dev/adsprpc-smd` for writing - would let the app decide without risking the process.
+3. **A device that permits app DSP access.** Nothing in the code needs to change for it; the
+   catalog already keys on `ro.soc.model`. Worth retrying on non-Samsung Snapdragon hardware.
+
+### Verdict
+
+The engineering is done and the measurements justify it. The blocker is a vendor policy on these
+two phones, and it is worth re-testing whenever sherpa-onnx fixes its error handling — at that
+point the feature becomes safe to leave enabled, and simply inert where the DSP is closed.

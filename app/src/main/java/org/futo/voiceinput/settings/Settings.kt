@@ -138,6 +138,21 @@ val ENGLISH_ENGINE = SettingsKey(intPreferencesKey("english_engine"), ENGLISH_EN
 // takes 7.2 seconds just to load on an S23 - see docs/research/asr-alternatives-2026-08.md.
 val PARAKEET_MODEL_INDEX = SettingsKey(intPreferencesKey("parakeet_model_index"), 0)
 
+// Run Parakeet on the Qualcomm Hexagon NPU instead of the CPU. The payoff is real - measured
+// with the sherpa-onnx CLI on an S23, 20 decodes of a 6.6s clip took 1.230s wall / 0.690s CPU
+// on the NPU against 2.333s / 7.972s on the CPU, i.e. 1.9x faster for ~11.6x less CPU time.
+//
+// **Off by default, and it must stay that way until the crash below is handled.** On both test
+// devices the NPU works when driven from an adb shell but fails inside the app: QNN returns
+// 14001 from deviceCreate, because Samsung exposes /dev/adsprpc-smd as system:system rw with
+// only read for others, so a normal app uid cannot drive the DSP. Requesting an unsigned
+// protection domain does not help.
+//
+// What makes this dangerous rather than merely useless is that sherpa-onnx handles QNN failures
+// with SHERPA_ONNX_EXIT(-1) - it kills the process instead of throwing, so tryLoadParakeet's
+// catch never runs and the keyboard dies mid-dictation. See docs/research/npu-acceleration-plan.md.
+val USE_NPU = SettingsKey(booleanPreferencesKey("use_npu"), false)
+
 val MULTILINGUAL_MODEL_INDEX = SettingsKey(intPreferencesKey("multilingual_model_index"), 2)
 
 val LANGUAGE_TOGGLES = SettingsKey(stringSetPreferencesKey("enabled_languages"), setOf("en"))

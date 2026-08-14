@@ -24,7 +24,10 @@ import org.futo.voiceinput.MULTILINGUAL_MODELS
 import org.futo.voiceinput.ModelData
 import org.futo.voiceinput.PARAKEET_MODELS
 import org.futo.voiceinput.R
+import org.futo.voiceinput.QNN_MAX_SECONDS
 import org.futo.voiceinput.isParakeetSupported
+import org.futo.voiceinput.isQnnSupported
+import org.futo.voiceinput.qnnBytesToDownload
 import org.futo.voiceinput.modelNeedsDownloading
 import org.futo.voiceinput.parakeetModelNeedsDownloading
 import org.futo.voiceinput.startParakeetDownloadActivity
@@ -51,6 +54,7 @@ import org.futo.voiceinput.settings.SettingToggleDataStore
 import org.futo.voiceinput.settings.SettingsViewModel
 import org.futo.voiceinput.settings.Tip
 import org.futo.voiceinput.settings.USE_LANGUAGE_SPECIFIC_MODELS
+import org.futo.voiceinput.settings.USE_NPU
 import org.futo.voiceinput.settings.getSettingBlocking
 import org.futo.voiceinput.settings.useDataStore
 import org.futo.voiceinput.startModelDownloadActivity
@@ -265,6 +269,25 @@ fun ModelsScreen(
                             "a fast phone and want the last bit of accuracy."
                     )
                 }
+                if (isQnnSupported()) {
+                    SettingToggleDataStore(
+                        "Use the NPU (experimental - crashes on this device)",
+                        USE_NPU,
+                        subtitle = "Hexagon NPU instead of the CPU: 1.9x faster for about 11x " +
+                            "less CPU time when it works. It does not work here - the DSP is " +
+                            "not open to normal apps, and the failure kills the app rather than " +
+                            "falling back. Leave off unless you are testing."
+                    )
+
+                    val qnnLeft = context.qnnBytesToDownload()
+                    if (qnnLeft > 0) {
+                        Tip(
+                            "%.0f MB still to download for the NPU models. Dictations longer than %ds would use the CPU."
+                                .format(qnnLeft / 1_000_000.0, QNN_MAX_SECONDS)
+                        )
+                    }
+                }
+
                 Tip(
                     "Parakeet is English-only and ignores the personal dictionary - these models " +
                         "have no prompt conditioning. Multilingual dictation always uses Whisper."
