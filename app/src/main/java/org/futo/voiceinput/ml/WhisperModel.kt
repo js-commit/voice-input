@@ -100,7 +100,7 @@ class WhisperModelWrapper(
 
     private val onStatusUpdate: (RunState) -> Unit,
     private val onPartialDecode: (String) -> Unit,
-) {
+) : SpeechModel {
     private var primaryModelGGML: WhisperGGML? = null
     private var fallbackModelGGML: WhisperGGML? = null
 
@@ -137,7 +137,7 @@ class WhisperModelWrapper(
     }
 
     private var modelJob: Job? = null
-    suspend fun run(
+    override suspend fun run(
         samples: FloatArray,
         glossary: String,
         forceLanguage: String?,
@@ -187,7 +187,7 @@ class WhisperModelWrapper(
         }
     }
 
-    suspend fun close() = withContext(inferenceContext) {
+    override suspend fun close(): Unit = withContext(inferenceContext) {
         primaryModelGGML?.close()
         fallbackModelGGML?.close()
     }

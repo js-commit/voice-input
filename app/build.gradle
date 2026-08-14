@@ -32,6 +32,21 @@ android {
         }
     }
 
+    // Instrumentation tests build against debug by default, which is useless for timing the
+    // recognizers: debug compiles ggml/whisper without -DNDEBUG so the hot loops keep their
+    // asserts, while sherpa-onnx comes in as a prebuilt release .so and is unaffected. That
+    // biases any Whisper-vs-Parakeet comparison badly. Run with -PtestRelease to measure the
+    // build users actually get.
+    testBuildType = project.hasProperty('testRelease') ? 'release' : 'debug'
+
+    packagingOptions {
+        jniLibs {
+            // The sherpa-onnx AAR ships arm64-v8a only (see app/libs). Without this, the
+            // packager complains that the ABI set does not match the CMake output.
+            useLegacyPackaging false
+        }
+    }
+
     final def keystorePropertiesFile = rootProject.file("keystore.properties")
     def releaseSigning = signingConfigs.debug
     if (keystorePropertiesFile.exists()) {
@@ -226,6 +241,12 @@ dependencies {
     debugImplementation 'androidx.compose.ui:ui-test-manifest'
 
     implementation 'com.squareup.okhttp3:okhttp:4.11.0'
+
+    // sherpa-onnx (Apache-2.0) + bundled onnxruntime, for the NVIDIA Parakeet engine. Taken from
+    // the upstream v1.13.5 GitHub release AAR and repacked to arm64-v8a only, dropping the unused
+    // c-api/cxx-api shared libs - the full AAR carries four ABIs and is 49 MB. Not on Maven
+    // Central, so it is vendored as a file dependency rather than a coordinate.
+    implementation files('libs/sherpa-onnx-1.13.5-arm64.aar')
 
     implementation 'ch.acra:acra-http:5.11.1'
     implementation 'ch.acra:acra-dialog:5.11.1'

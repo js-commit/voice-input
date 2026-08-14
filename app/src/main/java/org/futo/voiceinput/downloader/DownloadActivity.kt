@@ -44,6 +44,20 @@ import org.futo.voiceinput.theme.UixThemeAuto
 import org.futo.voiceinput.theme.Typography
 import java.io.File
 import java.io.IOException
+import java.security.MessageDigest
+
+private fun sha256Of(file: File): String {
+    val digest = MessageDigest.getInstance("SHA-256")
+    file.inputStream().use { input ->
+        val buffer = ByteArray(128 * 1024)
+        while (true) {
+            val read = input.read(buffer)
+            if (read == -1) break
+            digest.update(buffer, 0, read)
+        }
+    }
+    return digest.digest().joinToString("") { "%02x".format(it) }
+}
 
 
 data class ModelInfo(
@@ -52,7 +66,14 @@ data class ModelInfo(
     var size: Long?,
     var progress: Float = 0.0f,
     var error: Boolean = false,
-    var finished: Boolean = false
+    var finished: Boolean = false,
+
+    /**
+     * Expected SHA-256, or "" to skip the check. Set for models fetched from hosts outside
+     * FUTO's own (currently the Parakeet weights on Hugging Face) so a swapped or corrupted
+     * file cannot be handed to the inference runtime.
+     */
+    val digest: String = ""
 )
 
 val EXAMPLE_MODELS = listOf(
@@ -270,10 +291,22 @@ class DownloadActivity : ComponentActivity() {
                             }
                         }
 
-                        it.finished = true
-                        it.progress = 1.0f
                         os.flush()
                         os.close()
+
+                        if (it.digest.isNotEmpty()) {
+                            val actual = sha256Of(file)
+                            if (!actual.equals(it.digest, ignoreCase = true)) {
+                                println("digest mismatch for ${it.name}: expected ${it.digest}, got $actual")
+                                file.delete()
+                                it.error = true
+                                updateContent()
+                                return
+                            }
+                        }
+
+                        it.finished = true
+                        it.progress = 1.0f
 
                         assert(file.renameTo(File(this@DownloadActivity.filesDir, it.name)))
 
@@ -336,12 +369,20 @@ class DownloadActivity : ComponentActivity() {
         val models = intent.getStringArrayListExtra("models")
             ?: throw IllegalStateException("intent extra `models` must be specified for DownloadActivity")
 
-        modelsToDownload = models.filter { this.fileNeedsDownloading(it) }.map {
+        // Optional parallel arrays. Whisper models omit them and get the FUTO model host; the
+        // Parakeet models supply explicit URLs (Hugging Face / this fork's release) and digests.
+        val urls = intent.getStringArrayListExtra("urls")
+        val digests = intent.getStringArrayListExtra("digests")
+
+        modelsToDownload = models.indices.filter {
+            this.fileNeedsDownloading(models[it])
+        }.map { i ->
             ModelInfo(
-                name = it,
-                url = "https://voiceinput.futo.org/VoiceInput/${it}",
+                name = models[i],
+                url = urls?.getOrNull(i) ?: "https://voiceinput.futo.org/VoiceInput/${models[i]}",
                 size = null,
-                progress = 0.0f
+                progress = 0.0f,
+                digest = digests?.getOrNull(i) ?: ""
             )
         }
 
