@@ -223,4 +223,9 @@
     <string name="commitment_to_privacy_title">Commitment to Privacy</string>
     <string name="commitment_to_privacy_body">This app will never serve you ads or sell your data. We are not in the business of doing that.</string>
 
+    <string name="repair_service_label">Voice Input text insertion</string>
+    <string name="repair_service_description">Some keyboards silently lose the dictated text instead of typing it into the app (SwiftKey on Android 17 keeps the text waiting for a keyboard event that never comes). When enabled, Voice Input bypasses such keyboards and inserts the transcription into the focused text field directly. It reads only the focused text field, never touches password fields, and never sends data anywhere.</string>
+    <string name="repair_service_setting">Direct text insertion</string>
+    <string name="repair_service_setting_subtitle">Insert dictations into the text field directly instead of relying on the keyboard. Fixes SwiftKey losing dictations on Android 17. Requires enabling the accessibility service — tap to open Accessibility settings.</string>
+
 </resources>

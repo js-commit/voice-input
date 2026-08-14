@@ -246,6 +246,26 @@ class RecognizeActivity : ComponentActivity() {
     }
 
     private fun sendResult(result: String) {
+        // SwiftKey on Android 17 / One UI 9 receives our RESULT_OK and then never commits the
+        // text. Decompiled + logcat-verified (2026-08-14): its voice trampoline parks the text
+        // and flushes it from the next onStartInputView, but One UI 9 cancels every post-
+        // dictation keyboard re-show (PHASE_CLIENT_REPORT_REQUESTED_VISIBLE_TYPES - Android 17
+        // no longer restores IME visibility the app did not re-request), so onStartInputView
+        // never fires and the text rots in a field inside SwiftKey. Nothing we return through
+        // the intent can fix that.
+        //
+        // When the user has enabled our accessibility inserter, bypass SwiftKey entirely:
+        // return RESULT_CANCELED - its cancel path stores null, so nothing is parked and there
+        // is no delayed ghost-flush to double-insert against (upstream #77) - and insert the
+        // text ourselves. Other keyboards keep the normal contract; their delivery works.
+        if (callingPackage == "com.touchtype.swiftkey" &&
+            VoiceRepairAccessibilityService.takeInsertion(result)
+        ) {
+            setResult(RESULT_CANCELED, null)
+            finish()
+            return
+        }
+
         val returnIntent = Intent()
 
         val results = listOf(result)
