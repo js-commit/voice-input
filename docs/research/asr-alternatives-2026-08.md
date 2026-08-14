@@ -284,6 +284,11 @@ opt-in "most accurate" tier. The 110M model's footprint is ~4× smaller.
 
 ### 4.3 Moonshine v2 — the strongest runner-up
 
+> **Superseded — see §12.** Follow-up research found the decisive detail this section missed:
+> the Medium variant that makes Moonshine competitive **cannot be loaded by sherpa-onnx**. The
+> only English Moonshine models in sherpa's zoo are tiny and base, both well behind Parakeet
+> 110M. Read §12 before acting on anything below.
+
 Purpose-built for exactly this use case (low-latency, short utterances, edge devices), and
 the numbers are good:
 
@@ -775,3 +780,92 @@ silently dropped.
   left out rather than half-built; `decodingMethod` is `greedy_search`, and enabling hotwords
   would mean switching to `modified_beam_search` and shipping the BPE vocab.
 - **QNN / NPU.** Still CPU-only. At RTF 0.024 there is no pressing reason to chase it.
+
+---
+
+## 12. Is Moonshine worth adding? No. (researched 2026-08-13)
+
+§4.3 called Moonshine v2 Medium "a completely defensible pick" and said it was supported by
+sherpa-onnx. **The second half of that is wrong, and it invalidates the first half.**
+
+### What sherpa-onnx can actually load
+
+sherpa-onnx's Moonshine support covers, for English:
+
+| | Variants available |
+|---|---|
+| Moonshine **v1** | `sherpa-onnx-moonshine-tiny-en-int8`, `sherpa-onnx-moonshine-base-en-int8` |
+| Moonshine **v2** (re-quantized 2026-02-27) | tiny-en, base-en |
+
+That is the complete English list. **There is no Small and no Medium**, in either version.
+sherpa's broader v2 coverage — Arabic, Chinese, Japanese, Korean, Spanish, Ukrainian,
+Vietnamese — is base-sized models for other languages, which is what made the support look
+more complete than it is for our case.
+
+### Why the Medium model cannot simply be dropped in
+
+The Moonshine v2 paper's variants are Tiny 33.57M / Small 123.36M / Medium 244.93M. What
+`moonshine-ai/moonshine-v2` actually ships for English are the **streaming** variants, as
+OnnxRuntime `.ort` flatbuffers: `encoder_model.ort`, `decoder_model_merged.ort`,
+`tokenizer.bin`.
+
+sherpa's `OfflineMoonshineModelConfig` expects four separate `.onnx` files —
+`preprocess.onnx`, `encode.int8.onnx`, `uncached_decode.int8.onnx`, `cached_decode.int8.onnx`
+plus `tokens.txt`. Different container format (`.ort` vs `.onnx`), different graph
+decomposition, and v2's Ergodic Streaming Encoder is a different architecture from the v1
+export sherpa's loader was written against. This is a re-export-and-validate project, not a
+catalog entry.
+
+### And the models we *could* load are worse than what we ship
+
+This is the part that settles it. Lining up the accuracy ladder at comparable sizes:
+
+| Model | Params | Avg WER | Loadable by our engine? |
+|---|---|---|---|
+| Moonshine v2 Medium | 244.9M | **6.65%** | **✗ not in sherpa** |
+| **Parakeet 110M — current default** | **110M** | **7.50%** | **✓ shipping** |
+| Moonshine v2 Small | 123.4M | 7.84% | ✗ not in sherpa |
+| Moonshine v1 Base | 61M | 10.07% | ✓ |
+| Moonshine v2 Base (en) | ~61.5M | not published; sits between Tiny and Small | ✓ |
+| Moonshine v2 Tiny | 33.6M | 12.01% | ✓ (v2 tiny-en exists) |
+
+Parakeet 110M beats **every Moonshine variant sherpa can load**, and beats the v2 Small that
+it cannot, at 11% fewer parameters. Only Medium is ahead, and Medium is the one that is out of
+reach. There is no version of this trade that comes out in Moonshine's favour.
+
+Note also that the paper's parameter counts and the shipped streaming checkpoints disagree
+(paper Tiny 33.57M vs shipped tiny-streaming 26M; paper Medium 244.93M vs shipped
+medium-streaming 200M), so the streaming releases are not straightforwardly the models the WER
+table describes. Another reason not to plan around published numbers here.
+
+### Licensing, for the record
+
+MIT for the code and for the **English** models. Non-English Moonshine models are under the
+Moonshine Community License, which is non-commercial. Not a blocker for us (English-only), but
+it would be if scope ever widened — worth contrasting with Parakeet's CC-BY-4.0, which is
+uniform across languages.
+
+### What is actually worth watching instead
+
+sherpa-onnx **v1.13.5** (11 Aug 2026) added **QNN exports for Parakeet CTC** — the same model
+we already ship, running on the Qualcomm Hexagon NPU instead of the CPU. That is a far better
+lead than swapping architectures: same weights, same accuracy, same integration, potentially
+large power and latency wins on both target devices. §8 previously dismissed NPU work as
+unnecessary at RTF 0.024; that logic holds for speed, but not for battery.
+
+Also re-checked and still ruled out:
+
+- Everything above Parakeet on the Open ASR leaderboard remains **1B–2.5B params**
+  (Granite Speech 2B 5.33%, Cohere Transcribe 2B 5.42%, Canary-Qwen 2.5B 5.63%,
+  Qwen3-ASR 1.7B 5.76%). No movement into phone-sized territory.
+- `nemotron-3.5-asr-streaming-0.6b` was re-exported to ONNX with QNN support in 1.13.5, but at
+  8.20% it is still worse than Parakeet 110M while being 5× the size.
+- sherpa 1.13.5 added "X-ASR" zipformer transducers; no published English ESB average found,
+  and icefall/Zipformer English models have historically been LibriSpeech-domain and weak
+  off-domain (§4.5). Not worth chasing without an accuracy number.
+
+### Verdict
+
+**Stay on Parakeet 110M. Do not add Moonshine.** The engine choice (sherpa-onnx) remains
+correct — it is what would make a future swap cheap — but there is nothing in its model zoo
+that beats what is already selected.
