@@ -1,5 +1,6 @@
 package org.futo.voiceinput.settings.pages
 
+import android.content.Intent
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
@@ -52,6 +53,17 @@ fun AdvancedScreen(
         )
 
         SettingToggleDataStore(stringResource(R.string.use_beam_search), BEAM_SEARCH, subtitle = stringResource(R.string.recommended))
+
+        NavigationItem(
+            title = stringResource(R.string.repair_service_setting),
+            subtitle = stringResource(R.string.repair_service_setting_subtitle),
+            style = NavigationItemStyle.Misc,
+            navigate = {
+                context.startActivity(Intent(android.provider.Settings.ACTION_ACCESSIBILITY_SETTINGS).apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                })
+            }
+        )
 
         SettingToggleDataStore(
             stringResource(R.string.allow_undertrained_languages),

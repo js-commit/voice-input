@@ -6,6 +6,13 @@
         <item name="android:windowBackground">@null</item>
         <item name="android:windowCloseOnTouchOutside">false</item>
         <item name="android:windowIsFloating">true</item>
+        <!-- Translucent, not just floating. Android 17 / One UI 9 STOPS the activity behind a
+             floating-but-not-translucent window (WindowManager logs the window as
+             "styleTranslucent=false, floating=true"). A stopped caller that uses the AndroidX
+             ActivityResult API has its callback unregistered, so a result arriving at that moment
+             is buffered and lost if the caller then finishes without restarting. Translucent keeps
+             the caller merely paused, which is how Google's own recognizer behaves. -->
+        <item name="android:windowIsTranslucent">true</item>
         <item name="android:backgroundDimEnabled">true</item>
     </style>
 
