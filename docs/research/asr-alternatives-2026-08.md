@@ -869,3 +869,90 @@ Also re-checked and still ruled out:
 **Stay on Parakeet 110M. Do not add Moonshine.** The engine choice (sherpa-onnx) remains
 correct — it is what would make a future swap cheap — but there is nothing in its model zoo
 that beats what is already selected.
+
+---
+
+## 13. QNN / Hexagon NPU — feasible, but not yet worth building (researched 2026-08-13)
+
+§12 flagged sherpa-onnx 1.13.5's QNN exports as the better lead. Investigated properly.
+
+### The model we ship has QNN binaries, for the chip we care about
+
+`parakeet-tdt_ctc-110m` — the exact model now default — has QNN context binaries published
+under the `asr-models-qnn-binary-2` release tag, in both CTC and transducer branches:
+
+- **SoCs:** SM8350, SM8450, SM8475, **SM8550**, SM8650, SM8750, SM8850, QCS9100, SA8255, SA8295
+- **Durations:** 3s, 5s, 8s, 10s, 13s, 15s, 18s, 20s, 23s, 25s, 28s, 30s
+- **Size:** 78–82 MB per package — *smaller* than the 132 MB CPU int8 model
+- Confirmed by `adb`: the S23 is `ro.soc.model=SM8550`, `ro.board.platform=kalama`. Covered.
+
+sherpa-onnx has real support, not just exports: C++ runtimes for Parakeet CTC (#3688) and TDT
+(#3720), Kotlin API (`provider = "qnn"`, `QnnConfig(backendLib, systemLib, …)`,
+`prependAdspLibraryPath`), and Android demos.
+
+So the idea is sound. The problems are all in the delivery.
+
+### Blocker 1 — there is no prebuilt QNN AAR
+
+v1.13.5 ships `sherpa-onnx-1.13.5.aar` (CPU, what we vendor) and `sherpa-onnx-1.13.5-rknn.aar`
+(Rockchip NPU). **No `-qnn.aar`.** QNN means building sherpa-onnx from source with
+`SHERPA_ONNX_ENABLE_QNN=ON` against the Qualcomm SDK, producing `libonnxruntime.so` (~15 MB,
+larger than the CPU build) and `libsherpa-onnx-jni.so` (~4.6 MB), then repacking an AAR by
+hand — and redoing it on every sherpa upgrade.
+
+### Blocker 2 — it requires shipping Qualcomm proprietary blobs
+
+From sherpa-onnx's own Kotlin API, verbatim:
+
+> `// Please copy libQnnHtp.so and libQnnSystem.so to jniLibs/arm64-v8a by yourself`
+
+Plus the per-Hexagon-version DSP skeleton libraries — that is what `prependAdspLibraryPath`
+exists for. These come from the Qualcomm AI Engine Direct SDK, behind a developer account and a
+click-through licence. **I could not find explicit redistribution permission**; that needs the
+EULA read, not a search result.
+
+This lands badly for *this* app specifically. FUTO Voice Input ships an **fDroid** flavour
+(`app/build.gradle` productFlavors), and F-Droid requires free, buildable-from-source packages.
+Bundled Qualcomm blobs would likely disqualify that variant. A personal fork can carry them; an
+upstream PR probably cannot.
+
+### Blocker 3 — fixed input shape reintroduces Whisper's padding problem
+
+These are compiled Hexagon context binaries, not portable ONNX. The input shape is **baked in**:
+a 30s binary computes 30 seconds of work regardless of what was actually said. That is precisely
+the mandatory-30-second-encoder cost that makes Whisper slow on short dictation, reintroduced
+into the model that was chosen for not having it.
+
+Dodging it means shipping several duration buckets and choosing per utterance — at ~80 MB each,
+four buckets is ~320 MB of downloads. And the whole matrix is per-SoC, so it is
+`SoC × duration` combinations to host, select, and verify. Anything not on the supported list
+(Exynos, Tensor, MediaTek) needs the CPU path anyway, so that code stays regardless.
+
+### Blocker 4 — no published numbers, and little room to win
+
+No sherpa-onnx QNN-vs-CPU RTF or power measurement exists for Parakeet that I could find.
+Qualcomm's "up to 100× vs CPU" marketing is for their own tuned models, not this one.
+
+And the headroom is small. CPU decode is already **143 ms (Fold) / 213 ms (S23)**. Even a 5×
+win saves ~170 ms on the S23 — below perception for a dictation that has to wait for the user
+to stop talking anyway. The genuine prize is **battery**, which is plausible and entirely
+unquantified.
+
+### Verdict: measure battery first
+
+Multi-day build, a licensing question at its centre, an SoC × duration model matrix to host, no
+prebuilt artifact, and no measured benefit — to speed up something that already takes 0.2 s.
+
+The cheap decisive experiment is to find out whether dictation costs meaningful battery at all.
+`ParakeetBenchmarkTest` already runs decode in a loop with no speech needed; wrapping it in
+`dumpsys batterystats` over N iterations gives a CPU-path power baseline. If dictation is
+battery noise, this is settled. If it is not, the case becomes real and the blockers are worth
+paying.
+
+### Worth noting separately
+
+`nemotron-3.5-asr-streaming-0.6b` has QNN binaries for SM8550 at **80 / 160 / 320 / 560 /
+1120 ms** chunk sizes — a genuinely streaming model. That is a different feature (live text as
+you speak, §7.3) rather than an optimisation, and it is the one thing here that would change
+what the app *does* rather than how fast it does it. At 8.20% WER it is less accurate than
+Parakeet 110M, so it would be an addition, not a replacement.
