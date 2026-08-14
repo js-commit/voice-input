@@ -78,7 +78,7 @@ private const val HF_PARAKEET_06B =
 
 val PARAKEET_MODELS = listOf(
     SherpaModelData(
-        name = "Parakeet 110M (fast, recommended)",
+        name = "Parakeet 110M (recommended)",
         kind = SherpaModelKind.NemoCtc,
         approxRuntimeMb = 400,
         files = listOf(
@@ -98,7 +98,7 @@ val PARAKEET_MODELS = listOf(
     ),
 
     SherpaModelData(
-        name = "Parakeet 600M (most accurate, heavy)",
+        name = "Parakeet 600M (slightly more accurate, much slower)",
         kind = SherpaModelKind.Transducer,
         approxRuntimeMb = 1300,
         files = listOf(

@@ -21,10 +21,13 @@ import androidx.navigation.NavHostController
 import androidx.navigation.compose.rememberNavController
 import org.futo.voiceinput.ENGLISH_MODELS
 import org.futo.voiceinput.MULTILINGUAL_MODELS
+import org.futo.voiceinput.ModelData
 import org.futo.voiceinput.PARAKEET_MODELS
 import org.futo.voiceinput.R
 import org.futo.voiceinput.isParakeetSupported
+import org.futo.voiceinput.modelNeedsDownloading
 import org.futo.voiceinput.parakeetModelNeedsDownloading
+import org.futo.voiceinput.startParakeetDownloadActivity
 import org.futo.voiceinput.settings.ENGLISH_ENGINE
 import org.futo.voiceinput.settings.ENGLISH_ENGINE_PARAKEET
 import org.futo.voiceinput.settings.ENGLISH_ENGINE_WHISPER
@@ -152,20 +155,45 @@ fun ModelsScreen(
     val wasMigrated = useDataStore(setting = MODELS_MIGRATED)
     val dismissMigrationTip = useDataStore(setting = DISMISS_MIGRATION_TIP)
 
+    val usingParakeet = isParakeetSupported() && englishEngine.value == ENGLISH_ENGINE_PARAKEET
+
     val launchDownloaderIfNecessary = {
+        val whisperModels = mutableListOf<ModelData>()
+
         if (useMultilingual) {
-            context.startModelDownloadActivity(
-                listOf(
-                    ENGLISH_MODELS[englishModelIndex.value],
-                    MULTILINGUAL_MODELS[multilingualModelIndex.value]
-                )
+            whisperModels.add(MULTILINGUAL_MODELS[multilingualModelIndex.value])
+        }
+
+        // Only fetch the Whisper English model if something will actually use it. Since the
+        // English default is now the largest Whisper model, pulling it unconditionally would
+        // mean a 264 MB download just for opening this screen with Parakeet selected.
+        val whisperStillBacksEnglish = !usingParakeet ||
+            (useMultilingual && useLanguageSpecificModels && languages.contains("en"))
+        if (whisperStillBacksEnglish) {
+            whisperModels.add(ENGLISH_MODELS[englishModelIndex.value])
+        }
+
+        // One downloader at a time - the activity handles a single batch, and launching both
+        // would stack two of them. Whichever is left over is picked up on the next visit.
+        val whisperNeeded = whisperModels.filter { context.modelNeedsDownloading(it) }
+        if (whisperNeeded.isNotEmpty()) {
+            context.startModelDownloadActivity(whisperNeeded)
+        } else if (usingParakeet) {
+            context.startParakeetDownloadActivity(
+                PARAKEET_MODELS[parakeetModelIndex.value.coerceIn(PARAKEET_MODELS.indices)]
             )
-        } else {
-            context.startModelDownloadActivity(listOf(ENGLISH_MODELS[englishModelIndex.value]))
         }
     }
 
-    LaunchedEffect(listOf(useMultilingual, englishModelIndex.value, multilingualModelIndex.value)) {
+    LaunchedEffect(
+        listOf(
+            useMultilingual,
+            englishModelIndex.value,
+            multilingualModelIndex.value,
+            englishEngine.value,
+            parakeetModelIndex.value
+        )
+    ) {
         launchDownloaderIfNecessary()
     }
 
@@ -212,7 +240,7 @@ fun ModelsScreen(
                 )
             }
 
-            if (isParakeetSupported() && englishEngine.value == ENGLISH_ENGINE_PARAKEET) {
+            if (usingParakeet) {
                 SettingRadio(
                     "Parakeet model",
                     PARAKEET_MODELS.indices.toList(),
@@ -227,6 +255,14 @@ fun ModelsScreen(
                     Tip(
                         "%.0f MB still to download for \"%s\". It will be fetched the next time you dictate."
                             .format(selected.totalBytes / 1_000_000.0, selected.name)
+                    )
+                }
+                if (parakeetModelIndex.value == 1) {
+                    Tip(
+                        "600M is only about 1.5% more accurate than 110M, but on a Galaxy S23 it " +
+                            "decodes 10x slower and takes 7 seconds just to load. Measured on a " +
+                            "5.9s clip: 110M 213 ms, 600M 2211 ms. Prefer 110M unless you are on " +
+                            "a fast phone and want the last bit of accuracy."
                     )
                 }
                 Tip(

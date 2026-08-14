@@ -191,20 +191,33 @@ abstract class AudioRecognizer {
         }
     }
 
+    protected enum class ParakeetLoad {
+        Loaded,
+
+        /** Downloader launched; the recognition is over for now, same as the Whisper path. */
+        Downloading,
+
+        /** Wrong ABI or the model would not initialise - fall back to whisper.cpp. */
+        Unavailable
+    }
+
     /**
-     * Loads the Parakeet engine for an English-only recognition. Returns false if it is not
-     * usable (wrong ABI, or files not downloaded yet), in which case the caller falls back to
-     * whisper.cpp so a missing download never leaves the user with a dead mic button.
+     * Loads the Parakeet engine for an English-only recognition.
+     *
+     * [ParakeetLoad.Downloading] is deliberately distinct from [ParakeetLoad.Unavailable]: falling
+     * through to Whisper while a download is starting would open a second downloader on top of the
+     * first on a fresh install, where neither engine has its files yet.
      */
-    private suspend fun tryLoadParakeet(): Boolean {
-        if (!isParakeetSupported()) return false
+    private suspend fun tryLoadParakeet(): ParakeetLoad {
+        if (!isParakeetSupported()) return ParakeetLoad.Unavailable
 
         val idx = context.getSetting(PARAKEET_MODEL_INDEX).coerceIn(PARAKEET_MODELS.indices)
         val parakeetModel = PARAKEET_MODELS[idx]
 
         if (context.parakeetModelNeedsDownloading(parakeetModel)) {
             context.startParakeetDownloadActivity(parakeetModel)
-            return false
+            cancelRecognizer()
+            return ParakeetLoad.Downloading
         }
 
         return try {
@@ -214,11 +227,11 @@ abstract class AudioRecognizer {
                 parakeetModel,
                 numThreads = Runtime.getRuntime().availableProcessors().coerceIn(2, 8)
             )
-            true
+            ParakeetLoad.Loaded
         } catch (e: Exception) {
             Log.e("AudioRecognizer", "Parakeet load failed, falling back to Whisper: ${e.stackTraceToString()}")
             model = null
-            false
+            ParakeetLoad.Unavailable
         }
     }
 
@@ -265,8 +278,11 @@ abstract class AudioRecognizer {
             // whisper.cpp, including the multilingual-detect-then-switch-to-English path.
             val wantsParakeet = context.getSetting(ENGLISH_ENGINE) == ENGLISH_ENGINE_PARAKEET
             val englishOnly = forcedLanguage == "en" || (forcedLanguage == null && !isMultilingual)
-            if (wantsParakeet && englishOnly && tryLoadParakeet()) {
-                return
+            if (wantsParakeet && englishOnly) {
+                when (tryLoadParakeet()) {
+                    ParakeetLoad.Loaded, ParakeetLoad.Downloading -> return
+                    ParakeetLoad.Unavailable -> { /* fall through to whisper.cpp */ }
+                }
             }
 
             if (forcedLanguage != null) {

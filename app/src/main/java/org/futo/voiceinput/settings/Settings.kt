@@ -114,19 +114,31 @@ val ENABLE_MULTILINGUAL = SettingsKey(booleanPreferencesKey("enable_multilingual
 val DISALLOW_SYMBOLS = SettingsKey(booleanPreferencesKey("disallow_symbols"), true)
 val ENABLE_30S_LIMIT = SettingsKey(booleanPreferencesKey("enable_30s_limit"), false)
 
-val ENGLISH_MODEL_INDEX = SettingsKey(intPreferencesKey("english_model_index"), 0)
+// Defaults across all three model keys pick the most accurate option rather than the cheapest.
+// On the S23 (the slowest device targeted) the accuracy tiers are affordable, and a wrong
+// transcription costs more than the milliseconds saved by a smaller model.
+
+// English-244 (small.en, ~8.6% avg WER) rather than English-39. Only reached when Parakeet is
+// unavailable or switched off, so the extra 264 MB is not on the common path.
+val ENGLISH_MODEL_INDEX = SettingsKey(intPreferencesKey("english_model_index"), 2)
 
 // Which engine handles English. 0 = whisper.cpp (the models this app has always shipped),
 // 1 = NVIDIA Parakeet via sherpa-onnx. Kept as a separate key from ENGLISH_MODEL_INDEX so that
 // switching engines does not disturb the user's Whisper model choice, and so the multilingual
 // path is untouched - Parakeet here is English-only.
-val ENGLISH_ENGINE = SettingsKey(intPreferencesKey("english_engine"), 0)
+//
+// Parakeet is the default because it wins on both axes at once: 7.50% avg WER beats every
+// Whisper model this app ships, and it decodes a 5.9s clip in 213 ms on an S23 against
+// small.en's 2385 ms. Falls back to Whisper by itself on non-arm64 devices.
 const val ENGLISH_ENGINE_WHISPER = 0
 const val ENGLISH_ENGINE_PARAKEET = 1
+val ENGLISH_ENGINE = SettingsKey(intPreferencesKey("english_engine"), ENGLISH_ENGINE_PARAKEET)
 
+// 110M, not the 600M. The larger model is 1.45 WER points better but decodes 10x slower and
+// takes 7.2 seconds just to load on an S23 - see docs/research/asr-alternatives-2026-08.md.
 val PARAKEET_MODEL_INDEX = SettingsKey(intPreferencesKey("parakeet_model_index"), 0)
 
-val MULTILINGUAL_MODEL_INDEX = SettingsKey(intPreferencesKey("multilingual_model_index"), 1)
+val MULTILINGUAL_MODEL_INDEX = SettingsKey(intPreferencesKey("multilingual_model_index"), 2)
 
 val LANGUAGE_TOGGLES = SettingsKey(stringSetPreferencesKey("enabled_languages"), setOf("en"))
 

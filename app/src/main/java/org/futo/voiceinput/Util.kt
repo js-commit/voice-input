@@ -262,9 +262,12 @@ val LANGUAGE_LIST = listOf(
 )
 
 
+// Model names carry their engine, because the name is also what the recognizer popup shows and
+// "English-39" on its own does not say whether Whisper or Parakeet is running. The parenthetical
+// is stripped for that caption, so keep the engine and the size ahead of it.
 val ENGLISH_MODELS = listOf(
     ModelData(
-        name = "English-39 (default)",
+        name = "Whisper English-39 (fastest, least accurate)",
 
         ggml = ModelDataGGML(
             is_builtin_asset = true,
@@ -286,7 +289,7 @@ val ENGLISH_MODELS = listOf(
     ),
 
     ModelData(
-        name = "English-74 (slower, more accurate)",
+        name = "Whisper English-74",
 
         ggml = ModelDataGGML(
             is_builtin_asset = false,
@@ -312,7 +315,7 @@ val ENGLISH_MODELS = listOf(
     ),
 
     ModelData(
-        name = "English-244 (slow)",
+        name = "Whisper English-244 (most accurate)",
 
         ggml = ModelDataGGML(
             is_builtin_asset = false,
@@ -342,7 +345,7 @@ val ENGLISH_MODELS = listOf(
 
 val MULTILINGUAL_MODELS = listOf(
     ModelData(
-        name = "Multilingual-39 (less accurate)",
+        name = "Whisper Multilingual-39 (fastest, least accurate)",
 
         ggml = ModelDataGGML(
         is_builtin_asset = false,
@@ -367,7 +370,7 @@ val MULTILINGUAL_MODELS = listOf(
         )
     ),
     ModelData(
-        name = "Multilingual-74 (default)",
+        name = "Whisper Multilingual-74",
 
         ggml = ModelDataGGML(
             is_builtin_asset = false,
@@ -392,7 +395,7 @@ val MULTILINGUAL_MODELS = listOf(
         )
     ),
     ModelData(
-        name = "Multilingual-244 (slow)",
+        name = "Whisper Multilingual-244 (most accurate)",
 
         ggml = ModelDataGGML(
         is_builtin_asset = false,
