@@ -41,17 +41,9 @@ android {
 
     packagingOptions {
         jniLibs {
-            // Must be true, i.e. extractNativeLibs=true, for the NPU path.
-            //
-            // The Hexagon DSP loads libQnnHtpV73Skel.so / libQnnHtpV81Skel.so itself, through a
-            // separate subsystem that can only open a real file on disk - it cannot read a
-            // library that is still mapped inside the APK. With uncompressed packaging
-            // nativeLibraryDir has no actual files in it, and QNN fails at deviceCreate with
-            // error 14001 ("Failed to call deviceCreate"), which is what this looked like before.
-            //
-            // Extraction costs some install size and storage; it does not affect the 16 KB page
-            // support added in 1.3.7, since every AArch64 lib here is already 16 KB aligned.
-            useLegacyPackaging true
+            // The sherpa-onnx AAR ships arm64-v8a only (see app/libs). Without this, the
+            // packager complains that the ABI set does not match the CMake output.
+            useLegacyPackaging false
         }
     }
 
@@ -241,15 +233,7 @@ dependencies {
     // the upstream v1.13.5 GitHub release AAR and repacked to arm64-v8a only, dropping the unused
     // c-api/cxx-api shared libs - the full AAR carries four ABIs and is 49 MB. Not on Maven
     // Central, so it is vendored as a file dependency rather than a coordinate.
-    // QNN-enabled build: sherpa-onnx compiled from source against Qualcomm's QAIRT SDK
-    // 2.40.0.251030 and repacked with the Hexagon runtime (libQnnHtp / libQnnSystem, the v73 and
-    // v81 stubs, and the matching DSP skeletons). Upstream publishes no -qnn.aar variant, so this
-    // has to be rebuilt whenever sherpa-onnx is upgraded - see docs/research/npu-acceleration-plan.md.
-    //
-    // Qualcomm's AI Stack License section 1(iv) permits distributing the runtime in object code
-    // form as incorporated in an application; what it forbids is redistributing the SDK
-    // standalone. NOTICE.txt from the SDK belongs in the app's licence list.
-    implementation files('libs/sherpa-onnx-1.13.5-qnn-arm64.aar')
+    implementation files('libs/sherpa-onnx-1.13.5-arm64.aar')
 
     implementation 'androidx.datastore:datastore-preferences:1.0.0'
 

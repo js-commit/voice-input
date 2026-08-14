@@ -40,7 +40,6 @@ import org.futo.voiceinput.settings.ENGLISH_ENGINE
 import org.futo.voiceinput.settings.ENGLISH_ENGINE_PARAKEET
 import org.futo.voiceinput.settings.ENGLISH_MODEL_INDEX
 import org.futo.voiceinput.settings.PARAKEET_MODEL_INDEX
-import org.futo.voiceinput.settings.USE_NPU
 import org.futo.voiceinput.settings.IS_VAD_ENABLED
 import org.futo.voiceinput.settings.LANGUAGE_TOGGLES
 import org.futo.voiceinput.settings.MULTILINGUAL_MODEL_INDEX
@@ -133,8 +132,6 @@ abstract class AudioRecognizer {
 
     fun reset() {
         isVADPaused = false
-        npuOverflowed = false
-        loadedQnnVariant = null
         recorder?.stop()
         recorderJob?.cancel()
         modelJob?.cancel()
@@ -204,12 +201,6 @@ abstract class AudioRecognizer {
         Unavailable
     }
 
-    /** Which QNN context binary the currently loaded model uses, null when running on the CPU. */
-    private var loadedQnnVariant: QnnVariant? = null
-
-    /** Set once an utterance has been found too long for the NPU, so the reload picks the CPU. */
-    private var npuOverflowed = false
-
     /**
      * Loads the Parakeet engine for an English-only recognition.
      *
@@ -220,8 +211,6 @@ abstract class AudioRecognizer {
     private suspend fun tryLoadParakeet(): ParakeetLoad {
         if (!isParakeetSupported()) return ParakeetLoad.Unavailable
 
-        val wantsNpu = context.getSetting(USE_NPU) && isQnnSupported()
-
         val idx = context.getSetting(PARAKEET_MODEL_INDEX).coerceIn(PARAKEET_MODELS.indices)
         val parakeetModel = PARAKEET_MODELS[idx]
 
@@ -231,27 +220,12 @@ abstract class AudioRecognizer {
             return ParakeetLoad.Downloading
         }
 
-        // The model is loaded while recording is still in progress, so the utterance length is not
-        // known yet. Pick the largest context binary optimistically; runModel() re-checks against
-        // the real length and falls back to the CPU model if it overflowed, because past its
-        // compiled length the QNN runtime truncates the audio silently.
-        val qnnVariant = if (!wantsNpu || npuOverflowed) {
-            null
-        } else if (context.qnnNeedsDownloading()) {
-            context.startQnnDownloadActivity()
-            null
-        } else {
-            qnnVariantsForDevice().lastOrNull()
-        }
-        loadedQnnVariant = qnnVariant
-
         return try {
             decodingStatus(RunState.ProcessingEncoder)
             model = ParakeetModelWrapper(
                 context,
                 parakeetModel,
-                numThreads = Runtime.getRuntime().availableProcessors().coerceIn(2, 8),
-                qnnVariant = qnnVariant
+                numThreads = Runtime.getRuntime().availableProcessors().coerceIn(2, 8)
             )
             ParakeetLoad.Loaded
         } catch (e: Exception) {
@@ -599,24 +573,6 @@ abstract class AudioRecognizer {
         }
 
         val floatArray = floatSamples.array().sliceArray(0 until floatSamples.position())
-
-        // A QNN context binary has its input length compiled in and silently truncates anything
-        // longer - a 16.7s clip through the 15s binary lost its last three words with no error.
-        // Rather than hand back a quietly incomplete transcription, drop to the CPU model.
-        loadedQnnVariant?.let { variant ->
-            if (floatArray.size > variant.maxSeconds * 16000) {
-                Log.i("AudioRecognizer",
-                    "Utterance is ${floatArray.size / 16000f}s, over the NPU model's " +
-                        "${variant.maxSeconds}s limit - reloading on CPU")
-                npuOverflowed = true
-                decodingStatus(RunState.SwitchingModel)
-                model?.close()
-                model = null
-                loadModelJob = null
-                loadModel()
-                loadModelJob?.join()
-            }
-        }
 
         val words = context.getSetting(PERSONAL_DICTIONARY)
         val decodingMode = if(context.getSetting(BEAM_SEARCH)){ DecodingMode.BeamSearch5 } else { DecodingMode.Greedy }
