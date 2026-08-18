@@ -11,6 +11,7 @@ import android.os.SystemClock
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityManager
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.indication
@@ -52,12 +53,14 @@ import androidx.compose.runtime.withFrameMillis
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.composed
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.core.math.MathUtils.clamp
 import androidx.lifecycle.LifecycleCoroutineScope
@@ -157,7 +160,10 @@ fun InnerRecognize(
     magnitude: Float = 0.5f,
     state: MagnitudeState = MagnitudeState.MIC_MAY_BE_BLOCKED,
     modelName: String? = null,
-    openSettings: (() -> Unit)? = null
+    openSettings: (() -> Unit)? = null,
+    lastTranscription: String? = null,
+    onPasteLast: (() -> Unit)? = null,
+    onOpenHistory: (() -> Unit)? = null
 ) {
     val shouldUseCircle = useDataStoreValueNullable(ENABLE_ANIMATIONS.key, default = ENABLE_ANIMATIONS.default)
 
@@ -227,6 +233,65 @@ fun InnerRecognize(
                     contentDescription = stringResource(R.string.open_voice_input_settings),
                     modifier = Modifier.size(14.dp),
                     tint = captionColor
+                )
+            }
+        }
+    }
+
+    // Recovery row: when a keyboard drops a dictation, the fastest fix is to bring voice input
+    // back up and re-send the previous transcription, so the chip lives right here in the
+    // recognizer instead of behind the settings app. Tapping it delivers the last saved
+    // transcription through the exact same path a fresh dictation would take. The clock icon is
+    // the shortcut into the full history screen. Both clickables consume their taps, so neither
+    // triggers the surface-wide tap-to-finish gesture.
+    if ((lastTranscription != null && onPasteLast != null) || onOpenHistory != null) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 24.dp, vertical = 4.dp),
+            horizontalArrangement = Arrangement.Center,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            if (lastTranscription != null && onPasteLast != null) {
+                Row(
+                    modifier = Modifier
+                        .weight(1f, fill = false)
+                        .clip(RoundedCornerShape(16.dp))
+                        .background(MaterialTheme.colorScheme.secondaryContainer)
+                        .clickable { onPasteLast() }
+                        .padding(horizontal = 10.dp, vertical = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        painter = painterResource(R.drawable.clipboard),
+                        contentDescription = stringResource(R.string.paste_last_transcription),
+                        modifier = Modifier.size(14.dp),
+                        tint = MaterialTheme.colorScheme.onSecondaryContainer
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        lastTranscription,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        style = Typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSecondaryContainer
+                    )
+                }
+            }
+
+            if (onOpenHistory != null) {
+                if (lastTranscription != null && onPasteLast != null) {
+                    Spacer(modifier = Modifier.width(8.dp))
+                }
+                Icon(
+                    painter = painterResource(R.drawable.clock),
+                    contentDescription = stringResource(R.string.view_transcription_history),
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(16.dp))
+                        .clickable { onOpenHistory() }
+                        .padding(6.dp)
+                        .size(16.dp),
+                    tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
                 )
             }
         }
@@ -324,6 +389,9 @@ abstract class RecognizerView {
     private var shouldCopyToClipboard = COPY_RESULT_TO_CLIPBOARD.default
     private var shouldSaveToHistory = ENABLE_TRANSCRIPTION_HISTORY.default
 
+    // Newest saved transcription, shown as the tap-to-paste recovery chip while recording.
+    private var lastTranscription: String? = null
+
     // Display-only mirror of the model choice AudioRecognizer makes in loadModelInner():
     // english vs multilingual by ENABLE_MULTILINGUAL, overridden by a manually selected language.
     private var englishModelName: String? = null
@@ -337,6 +405,22 @@ abstract class RecognizerView {
         languages = context.getSetting(LANGUAGE_TOGGLES)
         shouldCopyToClipboard = context.getSetting(COPY_RESULT_TO_CLIPBOARD)
         shouldSaveToHistory = context.getSetting(ENABLE_TRANSCRIPTION_HISTORY)
+
+        lastTranscription = if (shouldSaveToHistory) {
+            try {
+                val json = context.getSetting(TRANSCRIPTION_HISTORY)
+                if (json.isEmpty()) {
+                    null
+                } else {
+                    JSONArray(json).optJSONObject(0)?.optString("text")
+                        ?.takeIf { it.isNotBlank() }
+                }
+            } catch (e: Exception) {
+                null
+            }
+        } else {
+            null
+        }
 
         // "Whisper English-244 (most accurate)" -> "Whisper English-244"; the parenthetical is
         // settings-list advice, not something worth repeating on every dictation. The engine is
@@ -375,6 +459,27 @@ abstract class RecognizerView {
     }
 
     /**
+     * Abandons the in-progress recording and delivers the last saved transcription instead,
+     * through the same path a fresh dictation result would take (IME commit, or intent result /
+     * accessibility insert). This is the one-tap recovery for a dictation the keyboard dropped:
+     * bring voice input back up, tap the chip, and the text lands in the field.
+     */
+    private fun pasteLastTranscription() {
+        val text = lastTranscription ?: return
+        recognizer.reset()
+        // Refreshes the IME host's cached text-around-cursor so the punctuation spacing in
+        // sendResult sees the current field, not the one from the previous dictation.
+        decodingStarted()
+        sendResult(text)
+    }
+
+    /** Same shape as [openModelSettings]: get out of the way, then show the history screen. */
+    private fun openTranscriptionHistory() {
+        context.openAppSettings(route = "history")
+        recognizer.cancelRecognizer()
+    }
+
+    /**
      * Put the recognized text on the clipboard as a fallback, so that a transcription is never
      * lost outright when the commit into the editor does not land.
      */
@@ -399,7 +504,9 @@ abstract class RecognizerView {
      * keyboard dropped the result, so this is the only loss-proof record of what was said.
      */
     private fun saveToHistory(text: String) {
-        if (text.isBlank()) return
+        // A transcription under three words is faster to redo than to recover, and saving it
+        // would evict a longer one from the 20-entry list and take over the recovery chip.
+        if (text.isBlank() || text.trim().split(Regex("\\s+")).size < 3) return
 
         // NonCancellable: sendResult() may finish the activity right after this is scheduled,
         // which cancels lifecycleScope - the write must survive that or the entry is lost.
@@ -615,7 +722,14 @@ abstract class RecognizerView {
                         magnitude = magnitude,
                         state = state,
                         modelName = activeModelName,
-                        openSettings = { openModelSettings() }
+                        openSettings = { openModelSettings() },
+                        lastTranscription = lastTranscription,
+                        onPasteLast = { pasteLastTranscription() },
+                        onOpenHistory = if (shouldSaveToHistory) {
+                            { openTranscriptionHistory() }
+                        } else {
+                            null
+                        }
                     )
                 }
             }
