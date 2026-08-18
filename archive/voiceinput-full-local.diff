@@ -1,0 +1,462 @@
+diff --git a/app/src/dev/res/values/strings.xml b/app/src/dev/res/values/strings.xml
+index e4782cd..b5cd9a2 100644
+--- a/app/src/dev/res/values/strings.xml
++++ b/app/src/dev/res/values/strings.xml
+@@ -1,4 +1,7 @@
+ <resources>
+     <string name="app_name">FUTO Voice Input [Dev]</string>
+     <string name="voice_input_method">FUTO Voice Input Method [Dev]</string>
++    <!-- This is the label the ACTION_RECOGNIZE_SPEECH chooser shows. Without a [Dev] override a
++         dev build is indistinguishable from a release install in the keyboard's mic chooser. -->
++    <string name="recognize_activity">Voice Input [Dev]</string>
+ </resources>
+\ No newline at end of file
+diff --git a/app/src/main/AndroidManifest.xml b/app/src/main/AndroidManifest.xml
+index 91af3b0..c6520b8 100644
+--- a/app/src/main/AndroidManifest.xml
++++ b/app/src/main/AndroidManifest.xml
+@@ -29,12 +29,25 @@
+         android:name=".CrashLoggingApplication"
+         android:largeHeap="true"
+         tools:targetApi="31" >
++        <!--
++        RecognizeActivity is always started with startActivityForResult (that is the
++        ACTION_RECOGNIZE_SPEECH contract), so it must run inside the caller's task. It used to be
++        declared singleInstance/clearTaskOnLaunch, which forces it into a task of its own; Android
++        does not reliably deliver activity results across tasks, and even when the result does
++        arrive the caller's task has to be re-resumed asynchronously after finish(). That makes the
++        caller's onActivityResult race the target editor regaining focus, so a keyboard that
++        commits the text as soon as the result arrives commits into an InputConnection that is no
++        longer active and the text is silently dropped.
++
++        Single-instance behaviour (only one recognizer window at a time) is enforced in
++        RecognizeActivity.onCreate instead.
++        -->
+         <activity
+             android:name=".RecognizeActivity"
+             android:exported="true"
+             android:label="@string/recognize_activity"
+-            android:clearTaskOnLaunch="true"
+-            android:launchMode="singleInstance"
++            android:launchMode="standard"
++            android:excludeFromRecents="true"
+             android:visibleToInstantApps="true"
+             android:configChanges="orientation|screenLayout|screenSize|keyboardHidden|keyboard|uiMode|density"
+             android:theme="@style/Theme.RecognizerInput">
+diff --git a/app/src/main/java/org/futo/voiceinput/RecognizeActivity.kt b/app/src/main/java/org/futo/voiceinput/RecognizeActivity.kt
+index 42b0fb3..7fbd368 100644
+--- a/app/src/main/java/org/futo/voiceinput/RecognizeActivity.kt
++++ b/app/src/main/java/org/futo/voiceinput/RecognizeActivity.kt
+@@ -40,6 +40,7 @@ import org.futo.voiceinput.migration.scheduleModelMigrationJob
+ import org.futo.voiceinput.settings.pages.ConditionalUnpaidNoticeInVoiceInputWindow
+ import org.futo.voiceinput.theme.UixThemeAuto
+ import org.futo.voiceinput.updates.scheduleUpdateCheckingJob
++import java.lang.ref.WeakReference
+ 
+ 
+ @Composable
+@@ -125,6 +126,14 @@ fun PreviewRecognizeViewNoMic() {
+ }
+ 
+ class RecognizeActivity : ComponentActivity() {
++    companion object {
++        // This activity used to be declared launchMode="singleInstance" to guarantee there is only
++        // ever one recognizer window. That is incompatible with startActivityForResult, which is
++        // how every ACTION_RECOGNIZE_SPEECH caller starts us (see the comment in the manifest), so
++        // the guarantee is enforced here instead: a new recognizer tears down the previous one.
++        private var currentInstance: WeakReference<RecognizeActivity>? = null
++    }
++
+     private val recognizer = object : RecognizerView() {
+         override val context: Context
+             get() = this@RecognizeActivity
+@@ -169,16 +178,43 @@ class RecognizeActivity : ComponentActivity() {
+ 
+     override fun onCreate(savedInstanceState: Bundle?) {
+         super.onCreate(savedInstanceState)
++
++        // Stop any recognizer that is still up before we grab the microphone, otherwise the old
++        // AudioRecord is still holding it when startRecording runs.
++        currentInstance?.get()?.let { previous ->
++            if (previous !== this && !previous.isFinishing) {
++                previous.recognizer.reset()
++                previous.finish()
++            }
++        }
++        currentInstance = WeakReference(this)
++
+         recognizer.reset()
+         recognizer.init()
+         scheduleUpdateCheckingJob(applicationContext)
+         scheduleModelMigrationJob(applicationContext)
+         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
++
++        // Stay out of the input-method pipeline entirely. Without this flag, this window becoming
++        // focused makes it the IME target, which deactivates the calling editor's InputConnection
++        // for the whole dictation. The editor is only reactivated after we finish() and it regains
++        // window focus - but keyboards deliver our RESULT_OK and insert the text within a few
++        // dozen milliseconds of finish(), racing that reactivation. When the insert loses the
++        // race, the app-side InputConnection silently discards it and the transcription is lost
++        // (observed as e.g. "beginBatchEdit on inactive InputConnection" from the target app).
++        // With this flag the editor's InputConnection stays active while the recognizer is up, so
++        // the keyboard's insert always lands no matter the timing. This window has no text input
++        // of its own, so opting out of the IME costs nothing.
++        window.addFlags(WindowManager.LayoutParams.FLAG_ALT_FOCUSABLE_IM)
+     }
+ 
+     override fun onDestroy() {
+         super.onDestroy()
+ 
++        if (currentInstance?.get() === this) {
++            currentInstance = null
++        }
++
+         recognizer.reset()
+     }
+ 
+diff --git a/app/src/main/java/org/futo/voiceinput/RecognizerView.kt b/app/src/main/java/org/futo/voiceinput/RecognizerView.kt
+index d9509ed..a7868ef 100644
+--- a/app/src/main/java/org/futo/voiceinput/RecognizerView.kt
++++ b/app/src/main/java/org/futo/voiceinput/RecognizerView.kt
+@@ -1,5 +1,7 @@
+ package org.futo.voiceinput
+ 
++import android.content.ClipData
++import android.content.ClipboardManager
+ import android.content.Context
+ import android.media.AudioAttributes
+ import android.media.AudioAttributes.CONTENT_TYPE_SONIFICATION
+@@ -58,6 +60,7 @@ import androidx.lifecycle.LifecycleCoroutineScope
+ import com.google.android.material.math.MathUtils
+ import kotlinx.coroutines.launch
+ import org.futo.voiceinput.ml.RunState
++import org.futo.voiceinput.settings.COPY_RESULT_TO_CLIPBOARD
+ import org.futo.voiceinput.settings.ENABLE_ANIMATIONS
+ import org.futo.voiceinput.settings.ENABLE_SOUND
+ import org.futo.voiceinput.settings.LANGUAGE_TOGGLES
+@@ -260,12 +263,33 @@ abstract class RecognizerView {
+     private var shouldBeVerbose = VERBOSE_PROGRESS.default
+     private var shouldRequestLanguage = MANUALLY_SELECT_LANGUAGE.default
+     private var languages = LANGUAGE_TOGGLES.default
++    private var shouldCopyToClipboard = COPY_RESULT_TO_CLIPBOARD.default
+ 
+     suspend fun loadSettings() {
+         shouldPlaySounds = context.getSetting(ENABLE_SOUND)
+         shouldBeVerbose = context.getSetting(VERBOSE_PROGRESS)
+         shouldRequestLanguage = context.getSetting(MANUALLY_SELECT_LANGUAGE)
+         languages = context.getSetting(LANGUAGE_TOGGLES)
++        shouldCopyToClipboard = context.getSetting(COPY_RESULT_TO_CLIPBOARD)
++    }
++
++    /**
++     * Put the recognized text on the clipboard as a fallback, so that a transcription is never
++     * lost outright when the commit into the editor does not land.
++     */
++    private fun copyToClipboard(text: String) {
++        if (text.isBlank()) return
++
++        try {
++            val clipboard =
++                context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
++            clipboard.setPrimaryClip(
++                ClipData.newPlainText(context.getString(R.string.app_name), text)
++            )
++        } catch (e: Exception) {
++            // Never let a clipboard failure take down the far more important sendResult path.
++            e.printStackTrace()
++        }
+     }
+ 
+     private val soundPool = SoundPool.Builder().setMaxStreams(2).setAudioAttributes(
+@@ -320,6 +344,13 @@ abstract class RecognizerView {
+         }
+ 
+         override fun finished(result: String) {
++            // Do this before sendResult: sendResult may switch the input method or finish the
++            // activity, and once that happens we are no longer a foreground/active app and
++            // setPrimaryClip is silently ignored on Android 10+.
++            if (shouldCopyToClipboard) {
++                copyToClipboard(result)
++            }
++
+             val manager = context.getSystemService(Context.ACCESSIBILITY_SERVICE) as AccessibilityManager
+             if(manager.isEnabled) {
+                 val event = AccessibilityEvent.obtain();
+diff --git a/app/src/main/java/org/futo/voiceinput/VoiceInputMethodService.kt b/app/src/main/java/org/futo/voiceinput/VoiceInputMethodService.kt
+index 513ee1a..a2571ea 100644
+--- a/app/src/main/java/org/futo/voiceinput/VoiceInputMethodService.kt
++++ b/app/src/main/java/org/futo/voiceinput/VoiceInputMethodService.kt
+@@ -4,6 +4,8 @@ import android.content.Context
+ import android.content.res.Configuration
+ import android.inputmethodservice.InputMethodService
+ import android.os.Build
++import android.os.Handler
++import android.os.Looper
+ import android.text.InputType
+ import android.view.View
+ import android.view.WindowManager
+@@ -168,6 +170,11 @@ fun PreviewRecognizeViewNoMicIME() {
+ val punctuationChars = setOf('!', '?', '.', ',')
+ class VoiceInputMethodService : InputMethodService(), LifecycleOwner, ViewModelStoreOwner,
+     SavedStateRegistryOwner {
++    companion object {
++        private const val COMMIT_RETRY_INTERVAL_MS = 50L
++        private const val COMMIT_TIMEOUT_MS = 1000L
++    }
++
+     private val mSavedStateRegistryController = SavedStateRegistryController.create(this)
+ 
+     override val savedStateRegistry: SavedStateRegistry
+@@ -197,6 +204,11 @@ class VoiceInputMethodService : InputMethodService(), LifecycleOwner, ViewModelS
+         scheduleModelMigrationJob(applicationContext)
+     }
+ 
++    private val mainHandler = Handler(Looper.getMainLooper())
++
++    /** Recognized text we have not managed to commit yet, if any. */
++    private var pendingCommitText: String? = null
++
+     private val recognizer = object : RecognizerView() {
+         override val context: Context
+             get() = this@VoiceInputMethodService
+@@ -216,60 +228,58 @@ class VoiceInputMethodService : InputMethodService(), LifecycleOwner, ViewModelS
+         override fun onCancel() {
+             needsInitialization = true
+             reset()
+-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+-                switchToPreviousInputMethod()
+-            } else {
+-                inputMethodManager.switchToLastInputMethod(window.window!!.attributes.token)
+-            }
++            pendingCommitText = null
++            mainHandler.removeCallbacksAndMessages(null)
++            switchBackToPreviousInputMethod()
+         }
+ 
+         var prevText: CharSequence? = null
+         var nextText: CharSequence? = null
+         override fun decodingStarted() {
+-            this@VoiceInputMethodService.currentInputConnection.also {
++            // Note: nothing emits RunState.StartedDecoding at the moment, so this never runs and
++            // prevText/nextText stay null - the auto-space-after-punctuation path below is
++            // currently dead.
++            this@VoiceInputMethodService.currentInputConnection?.also {
+                 prevText = it.getTextBeforeCursor(1, 0)
+                 nextText = it.getTextAfterCursor(1, 0)
+             }
+         }
+ 
+         override fun sendResult(result: String) {
+-            this@VoiceInputMethodService.currentInputConnection.also {
+-                var modifiedResult = result
++            var modifiedResult = result
+ 
+-                // Insert space automatically if ended at punctuation
+-                // TODO: Could send text before cursor as whisper prompt
++            // Insert space automatically if ended at punctuation
++            // TODO: Could send text before cursor as whisper prompt
+ 
+-                if(!prevText.isNullOrBlank()) {
+-                    val lastChar = prevText?.last()
++            if(!prevText.isNullOrBlank()) {
++                val lastChar = prevText?.last()
+ 
+-                    if (punctuationChars.contains(lastChar)) {
+-                        modifiedResult = " $result"
+-                    }
++                if (punctuationChars.contains(lastChar)) {
++                    modifiedResult = " $result"
+                 }
++            }
+ 
+-                /*
+-                if(!nextText.isNullOrBlank()) {
+-                    val oldPunctuation = nextText?.first()
+-                    val newPunctuation = result.last()
++            /*
++            if(!nextText.isNullOrBlank()) {
++                val oldPunctuation = nextText?.first()
++                val newPunctuation = result.last()
+ 
+-                    if (punctuationChars.contains(oldPunctuation) && punctuationChars.contains(newPunctuation)) {
+-                        it.deleteSurroundingText(0, 1)
+-                    }
++                if (punctuationChars.contains(oldPunctuation) && punctuationChars.contains(newPunctuation)) {
++                    it.deleteSurroundingText(0, 1)
+                 }
+-                */
+-
+-                it.commitText(modifiedResult, 1)
+             }
+-            onCancel()
++            */
++
++            commitRecognizedText(modifiedResult)
++
++            needsInitialization = true
++            reset()
+         }
+ 
+         override fun sendPartialResult(result: String): Boolean {
+-            if(this@VoiceInputMethodService.currentInputConnection != null) {
+-                this@VoiceInputMethodService.currentInputConnection.setComposingText(result, 1)
+-                return true
+-            } else {
+-                return false
+-            }
++            val ic = this@VoiceInputMethodService.currentInputConnection ?: return false
++            ic.setComposingText(result, 1)
++            return true
+         }
+ 
+         override fun requestPermission() {
+@@ -287,6 +297,68 @@ class VoiceInputMethodService : InputMethodService(), LifecycleOwner, ViewModelS
+         }
+     }
+ 
++    private fun switchBackToPreviousInputMethod() {
++        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
++            switchToPreviousInputMethod()
++        } else {
++            window.window?.attributes?.token?.let {
++                inputMethodManager.switchToLastInputMethod(it)
++            }
++        }
++    }
++
++    /**
++     * Commit recognized text into the editor, then switch back to the previous keyboard.
++     *
++     * The editor's InputConnection is not necessarily usable the moment recognition finishes: the
++     * target app may still be settling after the voice window came up, or input may have been
++     * finished while we were decoding. commitText cannot tell us that - on the IME side it returns
++     * as soon as the call is queued, and the app silently discards it if its InputConnection has
++     * already been finished, which is how recognized text ends up disappearing without any error.
++     *
++     * So we do not rely on the return value. We only commit while we hold a connection that still
++     * accepts a batch edit, retry briefly if we do not, and switch input methods only afterwards -
++     * switching tears the connection down and would otherwise race the commit we just queued.
++     */
++    private fun commitRecognizedText(text: String, waitedMs: Long = 0L) {
++        pendingCommitText = text
++
++        val ic = currentInputConnection
++        if (ic != null) {
++            // beginBatchEdit returns false once the connection has been finished, which is the only
++            // synchronous liveness signal an IME gets. Past the timeout we commit anyway rather
++            // than throw the text away.
++            val batched = ic.beginBatchEdit()
++            if (batched || waitedMs >= COMMIT_TIMEOUT_MS) {
++                pendingCommitText = null
++                try {
++                    // No finishComposingText() first: partial results are shown with
++                    // setComposingText and commitText already replaces the composing region.
++                    // Finishing it separately would leave the partial text behind and duplicate it.
++                    ic.commitText(text, 1)
++                } finally {
++                    if (batched) ic.endBatchEdit()
++                }
++
++                mainHandler.post { switchBackToPreviousInputMethod() }
++                return
++            }
++        }
++
++        if (waitedMs >= COMMIT_TIMEOUT_MS) {
++            println("Voice input: no usable InputConnection after ${waitedMs}ms, recognized text was not committed")
++            pendingCommitText = null
++            switchBackToPreviousInputMethod()
++            return
++        }
++
++        mainHandler.postDelayed({
++            if (pendingCommitText == text) {
++                commitRecognizedText(text, waitedMs + COMMIT_RETRY_INTERVAL_MS)
++            }
++        }, COMMIT_RETRY_INTERVAL_MS)
++    }
++
+     private fun setOwners() {
+         val decorView = window.window?.decorView
+         if (decorView?.findViewTreeLifecycleOwner() == null) {
+@@ -385,6 +457,9 @@ class VoiceInputMethodService : InputMethodService(), LifecycleOwner, ViewModelS
+     override fun onDestroy() {
+         super.onDestroy()
+ 
++        pendingCommitText = null
++        mainHandler.removeCallbacksAndMessages(null)
++
+         println("Destroy")
+         handleLifecycleEvent(Lifecycle.Event.ON_DESTROY)
+     }
+diff --git a/app/src/main/java/org/futo/voiceinput/settings/Settings.kt b/app/src/main/java/org/futo/voiceinput/settings/Settings.kt
+index 8a42afc..ae7a276 100644
+--- a/app/src/main/java/org/futo/voiceinput/settings/Settings.kt
++++ b/app/src/main/java/org/futo/voiceinput/settings/Settings.kt
+@@ -142,6 +142,12 @@ val MANUALLY_SELECT_LANGUAGE = SettingsKey(booleanPreferencesKey("manually_selec
+ 
+ val PERSONAL_DICTIONARY = SettingsKey(stringPreferencesKey("personal_dict"), "")
+ 
++// Safety net for the case where the recognized text never reaches the editor - the keyboard's
++// commit can be silently dropped if the editor's InputConnection is no longer active by the time
++// the result arrives. With this on, the text is always also on the clipboard so it can be pasted
++// by hand instead of being lost.
++val COPY_RESULT_TO_CLIPBOARD = SettingsKey(booleanPreferencesKey("copy_result_to_clipboard"), true)
++
+ val THEME_KEY = SettingsKey(
+     key = stringPreferencesKey("activeThemeOption"),
+     default = if(BuildConfig.FLAVOR == "dev" || BuildConfig.FLAVOR == "devSameId") { DevThemeYellow.key } else { VoiceInputTheme.key }
+diff --git a/app/src/main/java/org/futo/voiceinput/settings/pages/Advanced.kt b/app/src/main/java/org/futo/voiceinput/settings/pages/Advanced.kt
+index c02dc5d..d3cc4b6 100644
+--- a/app/src/main/java/org/futo/voiceinput/settings/pages/Advanced.kt
++++ b/app/src/main/java/org/futo/voiceinput/settings/pages/Advanced.kt
+@@ -11,6 +11,7 @@ import org.futo.voiceinput.MULTILINGUAL_MODELS
+ import org.futo.voiceinput.R
+ import org.futo.voiceinput.settings.ALLOW_UNDERTRAINED_LANGUAGES
+ import org.futo.voiceinput.settings.BEAM_SEARCH
++import org.futo.voiceinput.settings.COPY_RESULT_TO_CLIPBOARD
+ import org.futo.voiceinput.settings.DISALLOW_SYMBOLS
+ import org.futo.voiceinput.settings.DevOnlySettings
+ import org.futo.voiceinput.settings.ENABLE_30S_LIMIT
+@@ -53,6 +54,12 @@ fun AdvancedScreen(
+ 
+         SettingToggleDataStore(stringResource(R.string.use_beam_search), BEAM_SEARCH, subtitle = stringResource(R.string.recommended))
+ 
++        SettingToggleDataStore(
++            stringResource(R.string.copy_result_to_clipboard),
++            COPY_RESULT_TO_CLIPBOARD,
++            subtitle = stringResource(R.string.copy_result_to_clipboard_subtitle)
++        )
++
+         SettingToggleDataStore(
+             stringResource(R.string.allow_undertrained_languages),
+             ALLOW_UNDERTRAINED_LANGUAGES,
+diff --git a/app/src/main/res/values/strings.xml b/app/src/main/res/values/strings.xml
+index 01671ca..43d85b6 100644
+--- a/app/src/main/res/values/strings.xml
++++ b/app/src/main/res/values/strings.xml
+@@ -199,6 +199,8 @@
+     <string name="check_permissions">Check permissions</string>
+     <string name="use_beam_search">Use beam search</string>
+     <string name="recommended">Recommended</string>
++    <string name="copy_result_to_clipboard">Copy result to clipboard</string>
++    <string name="copy_result_to_clipboard_subtitle">Every transcription is also placed on the clipboard, so it can be pasted by hand if it does not reach the text field. Note that this overwrites whatever you last copied.</string>
+     <string name="new_model_features_tip">Models have been updated for better accuracy and faster performance. You can now also add words/phrases in the personal dictionary. If you have any issues or feedback after this change please contact us.</string>
+     <string name="personal_dictionary_placeholder">John Doe, Jane Smith, TensorFlow, bobble, type anything you want voice input to recognize more often here!</string>
+     <string name="personal_dictionary">Personal Dictionary</string>
+diff --git a/settings.gradle b/settings.gradle
+index 192238f..53396e6 100644
+--- a/settings.gradle
++++ b/settings.gradle
+@@ -17,7 +17,10 @@ dependencyResolutionManagement {
+     }
+ }
+ 
+-include ":dep:futopay:android:app"
++// LOCAL BUILD ONLY - not part of the upstream patch.
++// The dep/futopay module is not published in the public repo and nothing in :app depends on it,
++// so this orphaned include is removed to let Gradle configure.
++// include ":dep:futopay:android:app"
+ 
+ rootProject.name = "VoiceInput"
+ include ':app'
