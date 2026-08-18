@@ -163,15 +163,28 @@ class VoiceRepairAccessibilityService : AccessibilityService() {
     }
 
     /**
-     * The focused editable field if there is one; otherwise, if the active window contains exactly
-     * one editable field (the common chat-app layout), that field.
+     * The input-focused editable field in any on-screen window; otherwise, if the active window
+     * contains exactly one editable field (the common chat-app layout), that field.
      */
     private fun findTargetField(): AccessibilityNodeInfo? {
+        // Input focus can live outside the app's window: a field inside the keyboard itself
+        // (e.g. SwiftKey's GIF search box) belongs to the IME window, which rootInActiveWindow
+        // never covers. Windows are ordered topmost-first, so a focused IME field wins over the
+        // app's compose box behind it - it is the field the user was actually dictating into.
+        for (window in windows) {
+            val focused = window.root?.findFocus(AccessibilityNodeInfo.FOCUS_INPUT) ?: continue
+            if (!focused.isEditable) continue
+            // Never write into (or reason about) password fields.
+            return if (focused.isPassword) null else focused
+        }
+
         val root = rootInActiveWindow ?: return null
 
+        // The window list is empty until flagRetrieveInteractiveWindows is in effect (a service
+        // enabled before this flag shipped keeps its old config until toggled); the active
+        // window can still answer for the focused field directly.
         val focused = root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
         if (focused != null && focused.isEditable) {
-            // Never write into (or reason about) password fields.
             return if (focused.isPassword) null else focused
         }
 
