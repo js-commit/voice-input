@@ -121,7 +121,7 @@ Other traps:
 
 ## Device notes
 
-Two devices on wireless adb (`source ~/code/cli-tools/zsh-scripts/adb-wireless.zsh`):
+Two devices on wireless adb (`source "$WORKSPACE_DIR/cli-tools/zsh-scripts/adb-wireless.zsh"`):
 
 - Z Fold `SM-F976W` — `adb-RFGL7292SWL-dAo6qj._adb-tls-connect._tcp`
 - S23 `SM-S911W` (SM8550, 7.2 GB) — `adb-RFCW11GA1DB-ct9OzA._adb-tls-connect._tcp`, the minimum target
